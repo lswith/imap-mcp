@@ -1,0 +1,58 @@
+name: CI
+
+# Everything that gates a pull request, in one job sharing one install: Biome
+# (lint + format), TypeScript, the workerd test suites, knip (dead code), and a
+# wrangler deploy dry-run for both workers.
+#
+# Every check after the install runs even if an earlier one failed, so one red
+# check doesn't hide the others -- a full picture per run rather than a
+# fix-push-discover-the-next-one loop.
+#
+# PR-only by design: every check here is deterministic on the code, so
+# re-running them on the merge commit is duplication. Nothing on main is gated
+# on CI because nothing deploys from CI -- `wrangler deploy` is run by hand.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and format check (Biome)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run typecheck
+
+      - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run test
+
+      - name: Dead code detection (knip)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run dead-code
+
+      - name: Deploy dry-run
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run build

@@ -1,0 +1,9 @@
+# Local secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored).
+#
+# In production these are set with `wrangler secret put <NAME>`, NOT in
+# wrangler.jsonc -- that file is committed to a public repository.
+
+# App-specific password for the mailbox. Generate one at appleid.apple.com for
+# iCloud. It grants FULL mailbox access, including SMTP send, so treat it as
+# equivalent to the account password and rotate it by revoking the old one.
+IMAP_PASSWORD=dev_only_change_me

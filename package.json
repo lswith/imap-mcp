@@ -1,0 +1,22 @@
+{
+  "name": "imap-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generic IMAP to MCP server on Cloudflare Workers. Repo-wide tooling; the deployable workers live in packages/.",
+  "license": "MIT",
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "build": "pnpm -r run build",
+    "dead-code": "knip"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.1",
+    "knip": "^6.23.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,49 @@
+version: 2
+
+updates:
+  # One pnpm workspace: the root package.json + pnpm-lock.yaml cover both
+  # packages, so Dependabot resolves everything from "/".
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    # Match the repo's 4-day minimum release age (minimumReleaseAge in
+    # pnpm-workspace.yaml, enforced by pnpm at install time): only propose
+    # versions already at least 4 days old, so dependency PRs arrive passing
+    # the gate. Cooldown applies to version updates only -- security updates
+    # ignore it, and need a minimumReleaseAgeExclude entry in
+    # pnpm-workspace.yaml if the fixed version is younger than 4 days.
+    cooldown:
+      default-days: 4
+    groups:
+      cloudflare:
+        patterns:
+          - 'wrangler'
+          - '@cloudflare/*'
+      # Everything else that's a minor or patch bump lands in one weekly PR.
+      # Majors still get individual PRs -- those are the ones needing review.
+      minor-and-patch:
+        patterns:
+          - '*'
+        exclude-patterns:
+          - 'wrangler'
+          - '@cloudflare/*'
+        update-types:
+          - 'minor'
+          - 'patch'
+    commit-message:
+      prefix: 'build'
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    groups:
+      actions:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'ci'
