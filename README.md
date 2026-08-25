@@ -35,6 +35,8 @@ Two workers, and the split between them is the security design rather than a pac
 - **`packages/sync`** (`imap-mcp-sync`) is the only part of the system that speaks IMAP. It holds the app-specific password — which on iCloud grants full mailbox access *including SMTP send* — so that credential exists in exactly one place.
 - **`packages/mcp`** (`imap-mcp-server`) is a stateless reader. It queries the index, never the mailbox, and proxies the few write operations back to the sync worker over a service binding rather than opening a connection of its own.
 
+A third package, **`packages/imap`** (`@imap-mcp/imap`), is a library rather than a worker: the internal mailbox interface, and the only place the IMAP client library is imported. Only `packages/sync` depends on it.
+
 ## Quickstart
 
 ```bash
@@ -77,7 +79,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | | |
 | --- | --- |
 | [#2](https://github.com/lswith/imap-mcp/issues/2) | Repo scaffold — *this* |
-| [#3](https://github.com/lswith/imap-mcp/issues/3) | Vendor the IMAP client behind an internal interface |
+| [#3](https://github.com/lswith/imap-mcp/issues/3) | The IMAP client, behind an internal interface |
 | [#4](https://github.com/lswith/imap-mcp/issues/4) | D1 schema and migrations |
 | [#5](https://github.com/lswith/imap-mcp/issues/5) | Tracer: sync one folder into D1 |
 | [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path |
@@ -94,3 +96,38 @@ A spike settled the one question the whole architecture was contingent on — **
 ## Licence
 
 MIT — see [LICENSE](./LICENSE).
+
+### The IMAP client
+
+The protocol client is [`cf-imap`](https://github.com/Exerra/cf-imap) by Exerra
+([npm](https://www.npmjs.com/package/cf-imap)), MIT licensed — *Copyright (c)
+2024 Exerra*, `LICENSE` in the published tarball. It has zero runtime
+dependencies.
+
+Note for anyone running a licence scanner over this repo: no published version
+of `cf-imap` sets a `license` **field** in its `package.json`, so scanners
+report it as unlicensed. The MIT text does ship inside the tarball — it is a
+metadata gap, not an absent licence.
+
+Issue [#3](https://github.com/lswith/imap-mcp/issues/3) weighed vendoring the
+source against depending on the package and settled on depending. The
+generic-by-design requirement is met by the interface instead:
+`packages/imap/src/types.ts` is what the rest of the repo is written against,
+and `cf-imap` is imported in exactly one file
+(`packages/imap/src/cf-imap-mailbox.ts`), so swapping the client — or the
+provider — is a change to that file rather than a refactor.
+
+What depending rather than vendoring costs is that four behaviours of the
+pinned version are worked around or pinned by tests rather than fixed at the
+source. None is reported upstream yet:
+
+| Behaviour | Effect here |
+| --- | --- |
+| `storeFlags` cannot parse the `MODSEQ (n)` RFC 7162 §3.1.3 requires on untagged `FETCH` once CONDSTORE is enabled | a flag write that lands reports zero rows, so `setFlags` discards the `STORE` response and verifies every write with an independent `UID FETCH` |
+| every `iso-8859-*` charset is decoded as ISO-8859-1, ahead of the `TextDecoder` fallback | ISO-8859-15's euro sign arrives as a currency sign; pinned in `packages/imap/test/protocol/mime.test.ts` |
+| a `FETCH` literal is decoded as UTF-8 before the part's charset is known | bodies sent as raw 8-bit (`Content-Transfer-Encoding: 8bit`) lose their non-ASCII characters; anything quoted-printable or base64 is unaffected. Pinned in the same file |
+| the published ESM uses extensionless relative imports | bundlers (workerd, `wrangler deploy`) resolve them; Node's ESM resolver does not, so the Node-side test project has Vite process the package instead |
+
+The tests that pin these are contract tests over a pinned dependency: they are
+what turns an upgrade, or a swap to another client, into a red build rather
+than a quiet change in what fifteen years of mail decodes to.

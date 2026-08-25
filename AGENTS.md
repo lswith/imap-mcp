@@ -8,7 +8,7 @@ maintain.
 
 ## Layout
 
-pnpm workspace, two deployable Workers:
+pnpm workspace, two deployable Workers and one library:
 
 - `packages/sync` (`imap-mcp-sync`) — the **only** part of the system that
   speaks IMAP. Cron-triggered. Owns the connection and the app-specific
@@ -16,9 +16,13 @@ pnpm workspace, two deployable Workers:
 - `packages/mcp` (`imap-mcp-server`) — stateless MCP server. Reads the index,
   holds no mailbox credential, proxies writes to the sync worker over a service
   binding.
+- `packages/imap` (`@imap-mcp/imap`) — library, not a worker. The internal
+  mailbox interface, and the only place `cf-imap` is imported.
 
 That split is load-bearing, not stylistic: it keeps the credential in one
-worker. Do not give `packages/mcp` an IMAP connection.
+worker. Do not give `packages/mcp` an IMAP connection, and do not add
+`@imap-mcp/imap` to its dependencies — `packages/sync` is the only package that
+may depend on it.
 
 ## Build & Test
 
@@ -59,7 +63,13 @@ pnpm run deploy      # wrangler deploy
 
 ## Status
 
-Scaffold only. Nothing functional is implemented. The build is tracked as
-issues on this repo: #3 vendors the IMAP client, #4 the D1 schema, #5 the
-tracer sync, #7 the MCP server, #10 Access. See the roadmap table in
-README.md for the full list.
+Early. The mailbox interface (`packages/imap`, #3) is implemented and tested;
+both workers are still placeholders. The rest is tracked as issues on this
+repo: #4 the D1 schema, #5 the tracer sync, #7 the MCP server, #10 Access. See
+the roadmap table in README.md for the full list.
+
+Constraints already built into `packages/imap`, because the tickets downstream
+of it depend on them: everything is addressed by UID, fetches always PEEK,
+`ENABLE` is connection configuration so it cannot be issued after the first
+`SELECT`, flag writes are verified by reading back, and `EXPUNGE` is reachable
+only as `UID EXPUNGE` over an explicit set.

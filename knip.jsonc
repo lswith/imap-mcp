@@ -6,11 +6,17 @@
       "project": []
     },
     "packages/*": {
-      "project": ["src/**/*.ts", "test/**/*.ts"],
-      // The workerd test helpers are imported from the `cloudflare:test` module
-      // specifier, which knip reads as a package named `cloudflare`. It is
-      // provided by the runtime, not by a dependency, so there is nothing to
-      // install.
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    // The two workers' test suites import the workerd helpers from the
+    // `cloudflare:test` module specifier, which knip reads as a package named
+    // `cloudflare`. It is provided by the runtime, not by a dependency, so
+    // there is nothing to install. packages/imap is left out deliberately: it
+    // is a library with no bindings, so it never imports that module.
+    "packages/sync": {
+      "ignoreDependencies": ["cloudflare"]
+    },
+    "packages/mcp": {
       "ignoreDependencies": ["cloudflare"]
     }
   }
