@@ -17,4 +17,13 @@ describe("sync worker", () => {
     expect(log).toHaveBeenCalledTimes(1);
     log.mockRestore();
   });
+
+  it("can load the IMAP interface it will sync with", async () => {
+    // Not a placeholder: this is the wiring #5 depends on. It proves the
+    // workspace dependency resolves from this worker, inside workerd, with
+    // @imap-mcp/imap consumed as TypeScript source rather than a built bundle.
+    const { connectMailbox } = await import("@imap-mcp/imap");
+
+    expect(typeof connectMailbox).toBe("function");
+  });
 });
