@@ -25,6 +25,11 @@ export {
   ImapProtocolError,
   ImapTimeoutError,
   MailboxError,
+  // Exported for the sync worker's logger: every line it emits goes through
+  // these, so a credential cannot escape through a log call this package never
+  // sees. The scrubbing inside this package is unaffected by that.
+  passwordForms,
+  redactSecrets,
 } from "./errors";
 export type {
   AppendedMessage,

@@ -13,8 +13,25 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
-      // A test-only binding: the setup file applies these to env.DB.
-      miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+      miniflare: {
+        bindings: {
+          // A test-only binding: the setup file applies these to env.DB.
+          TEST_MIGRATIONS: migrations,
+          // The vars and secret a deployer supplies. They are not in
+          // wrangler.jsonc — this repository is public and none of them are
+          // committed — so the suite provides its own. Nothing here reaches a
+          // real mailbox: every test drives a fake Mailbox, and IMAP_PASSWORD
+          // exists so the tests that prove it never reaches a log line have
+          // something to look for.
+          IMAP_HOST: "imap.example.invalid",
+          IMAP_PORT: "993",
+          IMAP_USER: "ada",
+          IMAP_PASSWORD: "correct-horse-battery-staple",
+          SYNC_FOLDER: "Archive",
+          SYNC_BATCH_SIZE: "50",
+          SYNC_CHUNK_SIZE: "10",
+        },
+      },
     }),
   ],
   test: {
@@ -29,10 +46,11 @@ export default defineConfig({
       provider: "istanbul",
       reporter: ["text", "text-summary"],
       include: ["src/**/*.ts"],
-      // No thresholds yet: the only code here is a placeholder handler, so any
-      // number would be either trivially 100% or arbitrary. Set a real ratchet
-      // when the tracer lands (#5) and raise it from there,
-      // never lower it to make a red build pass.
+      // The ratchet, set where the tracer (#5) landed and a few points below
+      // it so an ordinary defensive branch does not fail a build. Raise it as
+      // coverage rises. Never lower it to make a red build pass: the number is
+      // only worth anything as a floor that has never moved down.
+      thresholds: { statements: 95, branches: 85, functions: 95, lines: 95 },
     },
   },
 });

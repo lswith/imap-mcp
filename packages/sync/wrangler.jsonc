@@ -54,8 +54,15 @@
   //
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
-  //   vars        -- IMAP_HOST / IMAP_PORT / IMAP_USER (see ../../.env.example)
   //   queues, r2_buckets -- #6, #9
+  //
+  // Nor is a `vars` block, which is why src/env.d.ts declares the shape
+  // instead: the mailbox host and user identify one person's account, and this
+  // file is committed to a public repository. Add them at deploy time (see
+  // ../../.env.example):
+  //   IMAP_HOST, IMAP_PORT, IMAP_USER  -- the mailbox
+  //   SYNC_FOLDER                      -- folder to sync; defaults to Archive
+  //   SYNC_BATCH_SIZE, SYNC_CHUNK_SIZE -- uids per run, messages per fetch
   //
   // Secrets (set with `pnpm exec wrangler secret put`):
   //   IMAP_PASSWORD -- app-specific password, full mailbox access incl. SMTP send

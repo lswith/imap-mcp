@@ -69,11 +69,11 @@ pnpm run deploy      # wrangler deploy
 
 ## Status
 
-Early. The mailbox interface (`packages/imap`, #3) and the D1 schema
-(`migrations/`, #4) are implemented and tested; both workers are still
-placeholders. The rest is tracked as issues on this repo: #5 the tracer sync,
-#7 the MCP server, #10 Access. See the roadmap table in README.md for the full
-list.
+Early. The mailbox interface (`packages/imap`, #3), the D1 schema
+(`migrations/`, #4) and the tracer sync (`packages/sync`, #5) are implemented
+and tested; `packages/mcp` is still a placeholder. The rest is tracked as
+issues on this repo: #6 queue fan-out, #7 the MCP server, #8 incremental sync,
+#10 Access. See the roadmap table in README.md for the full list.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -97,3 +97,25 @@ trip over if they are not known:
   against FTS5 — so re-running the backfill is the recovery path.
 - No `database_id` is committed; the binding is provisioned on first deploy.
   Both workers must end up on the *same* database.
+
+And from the tracer (`packages/sync`, #5), for the same reason:
+
+- **Nothing in `packages/sync` calls `console.*` directly.** Every line goes
+  through `createLogger(env)` (`src/log.ts`), which scrubs the password in each
+  form it could come back off the wire. Adding a bare `console.log` is how that
+  guarantee gets lost.
+- **Bodies are normalised at index time, not at read time** (`src/normalise.ts`):
+  HTML reduced with `HTMLRewriter`, hidden elements dropped, character
+  references decoded *before* hidden characters are stripped — `&#8203;` is a
+  zero-width space, and a filter that ran the other way round would miss it.
+- **`runSync` takes a `connect` seam** because the protocol cannot be faked
+  inside workerd: `cloudflare:sockets` is a runtime built-in there, so
+  `packages/imap`'s scripted-server harness only runs under Node. Real protocol
+  coverage belongs in `packages/imap`; `packages/sync` drives a fake `Mailbox`.
+- **Configuration is declared in `src/env.d.ts`, not in `wrangler.jsonc`.** No
+  `vars` block is committed, so `wrangler types` cannot generate those entries.
+  `readSyncConfig` turns an absent one into a named failure that does not retry.
+- **The sync window is uids `1..SYNC_BATCH_SIZE`, every run.** Deliberate: the
+  watermark is written for #8 but not read, so a second run re-covers the same
+  messages and the upsert is what keeps them from duplicating. Advancing the
+  window is #8 and #13.

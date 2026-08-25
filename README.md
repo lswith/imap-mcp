@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)) and the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)) are implemented and tested. Both workers are still placeholders: nothing syncs and nothing is served yet. See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)) and the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)) are implemented and tested: the sync worker indexes one folder into D1 on a cron. The MCP server is still a placeholder — nothing is served yet. See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -65,6 +65,7 @@ Everything you would need to supply is named and explained in [`.env.example`](.
 | Route / zone for the MCP worker | a `routes` entry you add to `packages/mcp/wrangler.jsonc` |
 | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | `vars` in `packages/mcp/wrangler.jsonc` |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in `packages/sync/wrangler.jsonc` |
+| `SYNC_FOLDER`, `SYNC_BATCH_SIZE`, `SYNC_CHUNK_SIZE` | `vars` in `packages/sync/wrangler.jsonc`; all optional |
 | `IMAP_PASSWORD` | `wrangler secret put`, sync worker only — never a `vars` entry |
 | The D1 database | provisioned on first deploy; see [Storage](#storage) |
 
@@ -138,6 +139,40 @@ writes back lands in a committed file**; it is yours, so don't push it upstream.
 Then apply the schema with `pnpm run db:migrate:remote`. Re-running it is a
 no-op — applied migrations are recorded in a `d1_migrations` table.
 
+## What the sync worker does
+
+Once an hour, `imap-mcp-sync` connects, opens one folder read-only, fetches a
+bounded range of UIDs from the start of it, reduces each message to a row and
+upserts it into D1. That is the whole of it today: no queue
+([#6](https://github.com/lswith/imap-mcp/issues/6)) and no incremental
+enumeration ([#8](https://github.com/lswith/imap-mcp/issues/8)) yet.
+
+Four properties of that run are deliberate, and each is pinned by a test rather
+than left as an intention:
+
+- **Nothing it does can change the mailbox.** The folder is opened with
+  `EXAMINE`, every fetch `PEEK`s — the internal `Mailbox` interface has no way
+  to fetch without it — and indexing therefore cannot mark mail as read.
+- **Re-running it writes no duplicate rows.** Every message write is an upsert
+  on `(folder_id, uidvalidity, uid)`, so the same window can be covered again
+  after a failure, a redeploy, or the at-least-once queue delivery of #6.
+- **An authentication failure aborts loudly and does not retry.** A revoked
+  app-specific password retried on every tick is how an Apple ID gets locked, so
+  that failure — and a missing setting — calls `noRetry()` and stops. Ordinary
+  failures are left to the next tick.
+- **The credential never reaches a log line.** Every line this worker logs is
+  scrubbed of the password in all the forms it could come back off the wire —
+  plaintext, quoted, and SASL base64 — including error paths.
+
+Bodies are normalised on the way in, because that is what gets indexed and,
+eventually, read by a model. HTML is reduced to plain text with a real parser
+(`HTMLRewriter`), `<script>` and `<style>` go with it, and so does anything a
+reader could not have seen: `hidden`, `aria-hidden`, `display: none`,
+`font-size: 0`. Then the characters that exist to hide text from a human —
+zero-width spaces, bidi overrides, the Unicode tag block — are stripped, after
+character references are decoded rather than before, so that a zero-width space
+written as `&#8203;` is caught too.
+
 ## Roadmap
 
 Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
@@ -147,7 +182,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#2](https://github.com/lswith/imap-mcp/issues/2) | Repo scaffold — *this* |
 | [#3](https://github.com/lswith/imap-mcp/issues/3) | The IMAP client, behind an internal interface |
 | [#4](https://github.com/lswith/imap-mcp/issues/4) | D1 schema and migrations |
-| [#5](https://github.com/lswith/imap-mcp/issues/5) | Tracer: sync one folder into D1 |
+| [#5](https://github.com/lswith/imap-mcp/issues/5) | Tracer: sync one folder into D1 — *done* |
 | [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path |
 | [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` |
 | [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` |
