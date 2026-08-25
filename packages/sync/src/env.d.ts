@@ -27,14 +27,29 @@ interface SyncEnvVars {
    */
   readonly IMAP_PASSWORD?: string;
   /**
-   * The one folder this worker syncs. Defaults to Archive: on iCloud the mail
-   * is in Archive, not INBOX, so a sync pointed at INBOX proves almost nothing.
+   * The folders this worker indexes, comma-separated. Defaults to Archive: on
+   * iCloud the mail is in Archive, not INBOX, so a sync pointed at INBOX proves
+   * almost nothing. Comma-separated because a folder name can contain almost
+   * anything else, the hierarchy delimiter included ("Lists/rust-dev").
    */
-  readonly SYNC_FOLDER?: string;
-  /** How many UIDs from the start of the folder to cover per run. */
-  readonly SYNC_BATCH_SIZE?: string;
+  readonly SYNC_FOLDERS?: string;
+  /**
+   * Uids per queue message, and the bucket size gap detection counts in (#6).
+   * Defaults to 100. Chunking by range rather than per message is what keeps a
+   * backfill to a few hundred logins instead of tens of thousands.
+   */
+  readonly SYNC_CHUNK_UIDS?: string;
   /** How many messages to fetch in one FETCH. Bounds peak memory. */
   readonly SYNC_CHUNK_SIZE?: string;
+  /** Uids per enumeration SEARCH. Bounds the response and the run's wall clock. */
+  readonly SYNC_ENUMERATE_WINDOW?: string;
+  /**
+   * How many ranges one cron tick may queue, across all folders. This is the
+   * throttle on a backfill: at the defaults, ~5000 messages an hour.
+   */
+  readonly SYNC_MAX_CHUNKS_PER_RUN?: string;
+  /** ISO date. When set, only mail received on or after it is indexed. */
+  readonly SYNC_SINCE?: string;
 }
 
 // Both interfaces, deliberately. `Env` is what the worker handler is typed

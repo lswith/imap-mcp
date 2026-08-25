@@ -2,11 +2,10 @@
  * The D1 writes.
  *
  * Every message write is an upsert on (folder_id, uidvalidity, uid). That is
- * not defensiveness about this worker, which runs once an hour from cron — it
- * is the contract the rest of the system is built on. Queue delivery (#6) is
- * at-least-once, so no consumer may assume it runs exactly once, and the
- * recovery path for this database is re-running the backfill (#13) over rows
- * that are already there.
+ * not defensiveness — it is the contract the rest of the system is built on.
+ * Queue delivery (#6) is at-least-once, so no consumer may assume it runs
+ * exactly once, and the recovery path for this database is re-running the
+ * backfill (#13) over rows that are already there.
  */
 
 import type { FolderState } from "@imap-mcp/imap";
@@ -126,12 +125,46 @@ export async function upsertMessages(
 }
 
 /**
- * The watermark #8 resumes from: the highest uid this run stored.
+ * How many messages are already indexed in each uid bucket.
  *
- * Written but never read here. This slice always covers the same window from
- * the start of the folder, so that a second run re-covers the same messages
- * and the upsert is what stops them duplicating — a watermark that made the
- * second run a no-op would prove nothing. Advancing the window is #8 and #13.
+ * This is the query gap detection is built on (#6): enumeration compares these
+ * counts against what SEARCH reported and enqueues only the buckets that are
+ * short. Buckets are absolute — see src/queue.ts — so the arithmetic here and
+ * the arithmetic there have to agree, which is why both take the size rather
+ * than assuming it.
+ *
+ * The UNIQUE (folder_id, uidvalidity, uid) index covers this, and the result is
+ * one row per bucket rather than one per message: a folder of 40,000 messages
+ * answers in 400 rows.
+ */
+export async function indexedBuckets(
+  db: D1Database,
+  folderId: number,
+  uidValidity: number,
+  bucketSize: number,
+): Promise<Map<number, number>> {
+  const { results } = await db
+    .prepare(
+      `SELECT (uid - 1) / CAST(? AS INTEGER) AS bucket, count(*) AS n
+       FROM messages WHERE folder_id = ? AND uidvalidity = ?
+       GROUP BY bucket`,
+    )
+    .bind(bucketSize, folderId, uidValidity)
+    .all<{ bucket: number; n: number }>();
+
+  return new Map(results.map((row) => [row.bucket, row.n]));
+}
+
+/**
+ * The watermark #8 resumes from: the highest uid below the first gap.
+ *
+ * Written by enumeration and by nothing else. Under queue fan-out (#6) ranges
+ * complete out of order, so a consumer recording "the highest uid I stored"
+ * would claim a contiguity that does not exist. Enumeration knows which
+ * buckets are complete, so it is the only caller that can tell the truth here.
+ *
+ * Still written rather than read: this slice re-derives the answer from D1 on
+ * every run. Reading it — and skipping the enumeration below it — is #8.
  */
 export async function recordSyncWatermark(
   db: D1Database,

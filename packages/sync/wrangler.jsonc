@@ -50,19 +50,57 @@
     }
   ],
   // Hourly, on the hour. Cron is UTC but the cadence is timezone-agnostic.
-  "triggers": { "crons": ["0 * * * *"] }
+  "triggers": { "crons": ["0 * * * *"] },
+  // The fan-out (#6). The cron enumerates uids and posts ~100-uid ranges here;
+  // this same worker consumes them, one range per invocation over one IMAP
+  // connection. Both queues are created by `wrangler deploy`, and Queues needs
+  // a Workers Paid plan.
+  "queues": {
+    "producers": [{ "binding": "SYNC_QUEUE", "queue": "imap-mcp-sync-chunks" }],
+    "consumers": [
+      {
+        "queue": "imap-mcp-sync-chunks",
+        // One range per invocation. The handler loops the batch over a single
+        // connection, so this can be raised without a code change.
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        // Low, and deliberately so. Queues will autoscale to hundreds of
+        // parallel consumers; D1 is a single Durable Object and single
+        // threaded, so high fan-out only relocates the bottleneck -- while
+        // simultaneously opening hundreds of IMAP connections to one Apple
+        // account. Nothing measured in the spike challenges 4-8.
+        "max_concurrency": 4,
+        "max_retries": 3,
+        "retry_delay": 30,
+        "dead_letter_queue": "imap-mcp-sync-dlq"
+      },
+      {
+        // Consumed only to log what was missed: the message already carries
+        // the folder and uid range, and re-running the backfill (#13) is the
+        // recovery path. Without a consumer these would expire unread.
+        "queue": "imap-mcp-sync-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 30,
+        "max_concurrency": 1,
+        "max_retries": 0
+      }
+    ]
+  }
   //
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
-  //   queues, r2_buckets -- #6, #9
+  //   r2_buckets  -- #9
   //
   // Nor is a `vars` block, which is why src/env.d.ts declares the shape
   // instead: the mailbox host and user identify one person's account, and this
   // file is committed to a public repository. Add them at deploy time (see
   // ../../.env.example):
   //   IMAP_HOST, IMAP_PORT, IMAP_USER  -- the mailbox
-  //   SYNC_FOLDER                      -- folder to sync; defaults to Archive
-  //   SYNC_BATCH_SIZE, SYNC_CHUNK_SIZE -- uids per run, messages per fetch
+  //   SYNC_FOLDERS                     -- folders to sync; defaults to Archive
+  //   SYNC_CHUNK_UIDS, SYNC_CHUNK_SIZE -- uids per queue message, messages per fetch
+  //   SYNC_ENUMERATE_WINDOW            -- uids per enumeration SEARCH
+  //   SYNC_MAX_CHUNKS_PER_RUN          -- ranges one cron tick may queue
+  //   SYNC_SINCE                       -- optional ISO date floor
   //
   // Secrets (set with `pnpm exec wrangler secret put`):
   //   IMAP_PASSWORD -- app-specific password, full mailbox access incl. SMTP send
