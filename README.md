@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)) and the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) are implemented and tested: the sync worker enumerates folders on a cron and indexes them into D1 through a queue. The MCP server is still a placeholder — nothing is served yet. See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) and incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 through a queue. The MCP server is still a placeholder — nothing is served yet. See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -146,8 +146,7 @@ Once an hour, `imap-mcp-sync` connects and **enumerates**: it opens each
 configured folder read-only, lists UIDs — identifiers only, no bodies — and
 posts them to a Cloudflare Queue in ranges of about a hundred. A **consumer**
 then takes one range per invocation, fetches it over a single IMAP connection,
-reduces each message to a row and upserts it into D1. Incremental enumeration
-([#8](https://github.com/lswith/imap-mcp/issues/8)) is still to come.
+reduces each message to a row and upserts it into D1.
 
 Three numbers in that shape are load-bearing:
 
@@ -169,6 +168,34 @@ bucket, and only the buckets that come up short are enqueued. A folder
 converges — each run queues what is still missing and then goes quiet — and a
 range that runs out of retries is picked up again on the next tick instead of
 being stepped over for good.
+
+**A run resumes rather than restarts.** Each folder carries a watermark: the
+highest UID below the first gap, which is the most that can honestly be claimed
+when ranges complete out of order under fan-out. The next run walks from above
+it, and asks D1 about the buckets above it too — matching the two is a
+correctness requirement rather than a saving, because the bucket straddling the
+watermark also holds rows below it. When the watermark reaches the top of a
+folder's UID space the folder is skipped without a single `SEARCH`, which is
+what makes a quiet hourly tick cheap rather than merely convergent. Against the
+real mailbox that is the difference between about eight seconds and about two.
+
+Two discontinuities are handled rather than assumed away. A changed
+`UIDVALIDITY` means every UID recorded for that folder now identifies a
+different message, so the watermark is dropped and the folder re-indexes from
+UID 1 — the old rows stay addressable under their own `uidvalidity` while that
+happens. And a folder **deleted or renamed upstream** is skipped with a warning
+instead of failing the run: one `LIST` per run tells the difference, because a
+tagged `NO` on `SELECT` looks the same either way, and ranges already in flight
+for that folder are dropped rather than spending three retries on their way to
+the dead-letter queue.
+
+`CONDSTORE` is enabled for the session, which has to happen in the
+authenticated state before the first `SELECT` — RFC 5161 requires that ordering
+and getting it wrong is silent, since the only symptom is that `HIGHESTMODSEQ`
+never appears. So support is detected by that value arriving, never by the
+`ENABLE` reply, which iCloud returns empty while plainly having enabled it.
+Nothing reads a mod-sequence yet; recording it per folder is what
+[#24](https://github.com/lswith/imap-mcp/issues/24) starts from.
 
 **Enumeration uses UID ranges and dates, and nothing else.** A spike ran sixteen
 `SEARCH` criteria against a real iCloud folder: `ALL`, `SINCE`/`BEFORE` and the
@@ -222,12 +249,13 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#5](https://github.com/lswith/imap-mcp/issues/5) | Tracer: sync one folder into D1 — *done* |
 | [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path — *done* |
 | [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` |
-| [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` |
+| [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` — *done* |
 | [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction |
 | [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth |
 | [#11](https://github.com/lswith/imap-mcp/issues/11) | `get_message` and `get_thread` |
 | [#12](https://github.com/lswith/imap-mcp/issues/12) | Write tools over a service binding, with an audit log |
 | [#13](https://github.com/lswith/imap-mcp/issues/13) | Full backfill and setup guide |
+| [#24](https://github.com/lswith/imap-mcp/issues/24) | Flag reconciliation over CONDSTORE |
 
 A spike settled the one question the whole architecture was contingent on — **can a Cloudflare Worker speak IMAP to iCloud at all?** It can: TLS and `LOGIN` on port 993 in 755 ms, folders listed, messages fetched and MIME-decoded, a draft appended and flagged. So the sync path is a Worker and nothing moves to a Container. The findings that constrain the design — CONDSTORE ordering, no `MOVE` on iCloud, `SEARCH` being unusable for content — are written into the tickets they affect.
 

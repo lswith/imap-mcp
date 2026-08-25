@@ -241,6 +241,55 @@ describe("consuming one uid range", () => {
     expect(row!.uid).toBe(0);
   });
 
+  it("drops the work when the folder is gone from the server", async () => {
+    // Deleted or renamed upstream. Retrying three times and dead-lettering the
+    // range teaches nobody anything: the folder is not coming back under this
+    // name, and the next cron tick will not enumerate it either.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ folders: [{ name: "Sent", messages: [] }] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await run(mailbox, chunk({ folderId: id }));
+
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(result).toMatchObject({ stored: 0, stale: true });
+    expect(warnings).toContain("Archive");
+    expect(await count("messages")).toBe(0);
+    expect(mailbox.fetches).toEqual([]);
+  });
+
+  it("lets a select failure out when the folder is still there", async () => {
+    // Not the same thing at all: the folder exists, so this is an ordinary
+    // failure and the range is worth retrying.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ messages: [fakeMessage(1)] });
+    vi.spyOn(mailbox, "selectFolder").mockRejectedValue(new ImapProtocolError("server said NO"));
+
+    await expect(run(mailbox, chunk({ folderId: id, uids: [1] }))).rejects.toThrow(
+      ImapProtocolError,
+    );
+    expect(await count("messages")).toBe(0);
+  });
+
+  it("keeps the range when it cannot find out whether the folder is gone", async () => {
+    // A LIST that fails says nothing about the folder. Dropping a range on the
+    // strength of a question that went unanswered would lose mail quietly.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ messages: [fakeMessage(1)] });
+    vi.spyOn(mailbox, "selectFolder").mockRejectedValue(new ImapProtocolError("server said NO"));
+    vi.spyOn(mailbox, "listFolders").mockRejectedValue(new ImapProtocolError("connection reset"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(run(mailbox, chunk({ folderId: id, uids: [1] }))).rejects.toThrow(
+      /server said NO/,
+    );
+
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(warnings).toContain("could not list folders");
+  });
+
   it("lets a fetch failure out, rather than acking work it did not do", async () => {
     const id = await seedFolder();
     const mailbox = new FakeMailbox({ messages: [fakeMessage(1)] });

@@ -70,10 +70,11 @@ pnpm run deploy      # wrangler deploy
 ## Status
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
-(`migrations/`, #4), the tracer sync (#5) and the queue fan-out (#6) are
-implemented and tested; `packages/mcp` is still a placeholder. The rest is
-tracked as issues on this repo: #7 the MCP server, #8 incremental sync, #9
-attachments, #10 Access. See the roadmap table in README.md for the full list.
+(`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6) and
+incremental sync (#8) are implemented and tested; `packages/mcp` is still a
+placeholder. The rest is tracked as issues on this repo: #7 the MCP server, #9
+attachments, #10 Access, #24 flag reconciliation. See the roadmap table in
+README.md for the full list.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -145,5 +146,30 @@ And from the sync worker (`packages/sync`, #5 and #6), for the same reason:
   string criteria are unusable against iCloud (`LARGER` matches everything,
   `SMALLER` nothing, `SUBJECT`/`TEXT`/`FROM` return no hits). A test asserts
   the criteria object has no other keys, so adding one fails the build.
-- **Reading the watermark instead of re-deriving it is #8.** Enumeration walks
-  from uid 1 every run; gap detection is what makes that cheap, not free.
+- **Enumeration resumes from the watermark, and gap detection is scoped to the
+  same floor.** `indexedBuckets` takes an `aboveUid` and the walk starts at
+  `watermark + 1`. Matching the two is correctness, not thrift: the bucket
+  straddling the watermark also holds rows below it, and counting the whole
+  bucket against the partial member list `SEARCH` returns would read an
+  incomplete bucket as complete and skip it for good.
+- **The walk is bounded by uid space, not by `EXISTS`.** Counting scanned uids
+  against `EXISTS` was right when every run started at uid 1. It is wrong now:
+  `EXISTS` counts what the folder holds, the rows below the watermark count
+  what D1 holds, and one message deleted upstream makes the second larger —
+  which would end the walk before it reached anything new.
+- **A folder whose watermark has reached `uidNext - 1` is skipped with no
+  `SEARCH` at all.** That is the quiet-tick path and the point of #8. It does
+  not fire when the folder's newest uid was deleted upstream; one empty
+  `SEARCH` a run is cheaper than the mechanism that would avoid it.
+- **CONDSTORE is enabled session-wide and confirmed by `HIGHESTMODSEQ`, never
+  by the `ENABLE` reply.** `mailboxConfig` (`src/session.ts`) is where the list
+  is set, and it exists as a separate function only so a test can assert it —
+  every other test injects `deps.connect` and never reaches the real one, and a
+  missing `ENABLE` produces no error at all. Nothing reads a mod-sequence yet;
+  #24 is where the recorded value gets used.
+- **A folder that is not on the server warns and is skipped; it does not fail
+  the run.** One `LIST` per enumeration decides, because a tagged `NO` on
+  `SELECT` cannot be told apart from any other. Consumers ask the same question
+  only on the `selectFolder` failure path, and a `LIST` that itself fails
+  answers "still there" — a range must never be dropped on the strength of a
+  question that went unanswered.

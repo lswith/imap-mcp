@@ -76,7 +76,7 @@ describe("the scheduled handler", () => {
 
     const logged = log.mock.calls.map(String).join("\n");
     log.mockRestore();
-    expect(logged).toContain("Archive: 2 uids, 2 ranges queued");
+    expect(logged).toContain("Archive: 2 uids from 1, 2 ranges queued");
     expect(queue.sent).toHaveLength(2);
   });
 

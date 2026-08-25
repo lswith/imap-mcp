@@ -8,7 +8,7 @@
  * have to run to reach D1.
  */
 
-import { connectMailbox, type Mailbox } from "@imap-mcp/imap";
+import { connectMailbox, type Mailbox, type MailboxConfig } from "@imap-mcp/imap";
 import type { SyncConfig } from "./config";
 import { describeError, type Logger } from "./log";
 
@@ -17,16 +17,31 @@ export type SyncDeps = {
   log?: Logger;
 };
 
-function defaultConnect(config: SyncConfig): Promise<Mailbox> {
-  return connectMailbox({
+/**
+ * The connection options, separated from opening the connection.
+ *
+ * Only so `enable` is assertable: every other test in this package injects
+ * `deps.connect` and never reaches defaultConnect, and a missing ENABLE is the
+ * kind of mistake that produces no error at all.
+ */
+export function mailboxConfig(config: SyncConfig): MailboxConfig {
+  return {
     host: config.host,
     port: config.port,
     username: config.username,
     password: config.password,
-    // No `enable: ["CONDSTORE"]`: nothing in this slice reads a mod-sequence,
-    // and ENABLE is connection configuration that #8 will want set here when
-    // it does.
-  });
+    // CONDSTORE, session-wide (#8). RFC 5161 requires ENABLE in the
+    // authenticated state, and connectMailbox issues this between
+    // authentication and returning a Mailbox — so it cannot be issued too
+    // late. Whether it took effect is read off HIGHESTMODSEQ per folder, never
+    // off the ENABLE reply, which iCloud returns empty while plainly having
+    // enabled it.
+    enable: ["CONDSTORE"],
+  };
+}
+
+function defaultConnect(config: SyncConfig): Promise<Mailbox> {
+  return connectMailbox(mailboxConfig(config));
 }
 
 /**
