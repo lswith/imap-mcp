@@ -70,11 +70,11 @@ pnpm run deploy      # wrangler deploy
 ## Status
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
-(`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6) and
-incremental sync (#8) are implemented and tested; `packages/mcp` is still a
-placeholder. The rest is tracked as issues on this repo: #7 the MCP server, #9
-attachments, #10 Access, #24 flag reconciliation. See the roadmap table in
-README.md for the full list.
+(`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6), incremental
+sync (#8) and the MCP server (`packages/mcp`, #7) are implemented and tested.
+The rest is tracked as issues on this repo: #9 attachments, #10 Access, #11
+`get_message` and `get_thread`, #12 write tools, #24 flag reconciliation. See
+the roadmap table in README.md for the full list.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -173,3 +173,42 @@ And from the sync worker (`packages/sync`, #5 and #6), for the same reason:
   only on the `selectFolder` failure path, and a `LIST` that itself fails
   answers "still there" — a range must never be dropped on the strength of a
   question that went unanswered.
+
+And from the MCP server (`packages/mcp`, #7), which is where anything reaching a
+model is decided:
+
+- **`createMcpHandler` comes from `@modelcontextprotocol/server`**, the official
+  SDK, not from Vercel's `mcp-handler` wrapper and not from the deprecated
+  `McpAgent`. It runs on workerd because the package's `./_shims` export has a
+  `workerd` condition that swaps Ajv — which needs `eval` — for a bundled
+  `@cfworker/json-schema` validator. Nothing in this package may import
+  `@modelcontextprotocol/server/stdio`.
+- **The handler is built per request, in `fetch`.** The factory it takes is
+  handed no `env`, so a handler held at module scope would close over whichever
+  `env` arrived first. Per-request construction is a couple of cheap objects and
+  it is what "stateless" actually means here.
+- **No user string reaches `MATCH` as syntax.** `toMatchExpression`
+  (`src/fts.ts`) re-emits every term as an FTS5 string literal, because an
+  unbalanced quote or a bare `*` is a syntax error, not a search. A trailing `*`
+  survives on purpose: `unicode61` indexes CJK as one token and the prefix query
+  is the documented workaround.
+- **Message bodies never leave this worker.** `search.ts` searches `body_text`
+  and snippets it and never selects it. A broad query that put a hundred bodies
+  in front of a model is the injection surface the whole design is arranged
+  around, which is also why the result count has a ceiling a caller cannot lift.
+- **The untrusted-content envelope carries a nonce drawn per response**
+  (`src/untrusted.ts`). A fixed delimiter is a fixed string, and a subject line
+  written months ago can contain it; a nonce cannot be known at the time the
+  message was sent, so the closing tag is the one thing in the output an author
+  cannot forge. Subjects and snippets are flattened to one line for the same
+  reason — a newline would otherwise let a body add rows to the result list it
+  appears in. There is deliberately no `structuredContent`: a JSON copy of the
+  same text would reach the model outside the frame.
+- **Search joins on the folder's current `uidvalidity`.** A folder that changed
+  it leaves the previous generation in `messages` rather than colliding with it,
+  so without the join every message in a re-synced folder comes back twice —
+  half of them under uids that no longer address anything on the server.
+- **Origin is validated, Host is not.** On Workers `request.url` is built from
+  the Host header, so checking one against the other answers nothing. Origin is
+  what separates a browser from an MCP client: clients send none and pass, a
+  page on another site sends its own and is turned away.
