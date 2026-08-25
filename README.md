@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) and incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 through a queue. The MCP server is still a placeholder — nothing is served yet. See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) and the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 through a queue, and the MCP server serves `search_messages` over that index. Nothing is authenticated yet, so the MCP worker has no route until Access lands ([#10](https://github.com/lswith/imap-mcp/issues/10)). See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -248,7 +248,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#4](https://github.com/lswith/imap-mcp/issues/4) | D1 schema and migrations |
 | [#5](https://github.com/lswith/imap-mcp/issues/5) | Tracer: sync one folder into D1 — *done* |
 | [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path — *done* |
-| [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` |
+| [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` — *done* |
 | [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` — *done* |
 | [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction |
 | [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth |

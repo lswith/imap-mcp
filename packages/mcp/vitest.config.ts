@@ -29,10 +29,13 @@ export default defineConfig({
       provider: "istanbul",
       reporter: ["text", "text-summary"],
       include: ["src/**/*.ts"],
-      // No thresholds yet: the only code here is a placeholder handler, so any
-      // number would be either trivially 100% or arbitrary. Set a real ratchet
-      // when search_messages lands (#7) and raise it from there,
-      // never lower it to make a red build pass.
+      // The ratchet, set where search_messages landed (#7). The suite measures
+      // 100% on every counter; these sit a few points under so an ordinary
+      // defensive branch does not fail a build on the day it is written.
+      // Raise them as coverage rises, and never lower them to make a red build
+      // pass — the number is only worth anything as a floor that has never
+      // moved down.
+      thresholds: { statements: 98, branches: 95, functions: 95, lines: 98 },
     },
   },
 });
