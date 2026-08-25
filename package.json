@@ -12,7 +12,9 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "build": "pnpm -r run build",
-    "dead-code": "knip"
+    "dead-code": "knip",
+    "db:migrate:local": "pnpm --filter @imap-mcp/sync exec wrangler d1 migrations apply imap-mcp --local",
+    "db:migrate:remote": "pnpm --filter @imap-mcp/sync exec wrangler d1 migrations apply imap-mcp --remote"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.1",
