@@ -27,9 +27,14 @@ export default defineConfig({
           IMAP_PORT: "993",
           IMAP_USER: "ada",
           IMAP_PASSWORD: "correct-horse-battery-staple",
-          SYNC_FOLDER: "Archive",
-          SYNC_BATCH_SIZE: "50",
+          SYNC_FOLDERS: "Archive",
+          // Ten-uid buckets and a hundred-uid window: small enough that a test
+          // can name the ranges it expects, and the arithmetic is the same at
+          // the production defaults of 100 and 5000.
+          SYNC_CHUNK_UIDS: "10",
           SYNC_CHUNK_SIZE: "10",
+          SYNC_ENUMERATE_WINDOW: "100",
+          SYNC_MAX_CHUNKS_PER_RUN: "50",
         },
       },
     }),
@@ -46,11 +51,11 @@ export default defineConfig({
       provider: "istanbul",
       reporter: ["text", "text-summary"],
       include: ["src/**/*.ts"],
-      // The ratchet, set where the tracer (#5) landed and a few points below
-      // it so an ordinary defensive branch does not fail a build. Raise it as
-      // coverage rises. Never lower it to make a red build pass: the number is
-      // only worth anything as a floor that has never moved down.
-      thresholds: { statements: 95, branches: 85, functions: 95, lines: 95 },
+      // The ratchet, set where the queue fan-out (#6) landed and a point or
+      // two below it so an ordinary defensive branch does not fail a build.
+      // Raise it as coverage rises. Never lower it to make a red build pass:
+      // the number is only worth anything as a floor that has never moved down.
+      thresholds: { statements: 97, branches: 88, functions: 98, lines: 99 },
     },
   },
 });

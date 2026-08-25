@@ -70,10 +70,10 @@ pnpm run deploy      # wrangler deploy
 ## Status
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
-(`migrations/`, #4) and the tracer sync (`packages/sync`, #5) are implemented
-and tested; `packages/mcp` is still a placeholder. The rest is tracked as
-issues on this repo: #6 queue fan-out, #7 the MCP server, #8 incremental sync,
-#10 Access. See the roadmap table in README.md for the full list.
+(`migrations/`, #4), the tracer sync (#5) and the queue fan-out (#6) are
+implemented and tested; `packages/mcp` is still a placeholder. The rest is
+tracked as issues on this repo: #7 the MCP server, #8 incremental sync, #9
+attachments, #10 Access. See the roadmap table in README.md for the full list.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -98,7 +98,7 @@ trip over if they are not known:
 - No `database_id` is committed; the binding is provisioned on first deploy.
   Both workers must end up on the *same* database.
 
-And from the tracer (`packages/sync`, #5), for the same reason:
+And from the sync worker (`packages/sync`, #5 and #6), for the same reason:
 
 - **Nothing in `packages/sync` calls `console.*` directly.** Every line goes
   through `createLogger(env)` (`src/log.ts`), which scrubs the password in each
@@ -115,7 +115,35 @@ And from the tracer (`packages/sync`, #5), for the same reason:
 - **Configuration is declared in `src/env.d.ts`, not in `wrangler.jsonc`.** No
   `vars` block is committed, so `wrangler types` cannot generate those entries.
   `readSyncConfig` turns an absent one into a named failure that does not retry.
-- **The sync window is uids `1..SYNC_BATCH_SIZE`, every run.** Deliberate: the
-  watermark is written for #8 but not read, so a second run re-covers the same
-  messages and the upsert is what keeps them from duplicating. Advancing the
-  window is #8 and #13.
+- **`runSync` is gone.** The cron enumerates (`src/enumerate.ts`) and a queue
+  consumer fetches (`src/consume.ts`); `src/session.ts` holds the `connect`
+  seam and the guarded close they share. There is no single function that does
+  a sync end to end any more, and reintroducing one would put a mailbox's worth
+  of work back inside one invocation.
+- **What to enqueue is decided by gap detection, not by a cursor.**
+  `indexedBuckets` (`src/store.ts`) asks D1 how many rows each uid bucket
+  already holds, and only short buckets are queued. Three things depend on it:
+  a folder converges instead of re-fetching hourly, a dead-lettered range comes
+  back next tick rather than being stepped over, and the watermark can be the
+  highest uid *below the first gap* rather than a lie about contiguity.
+- **Buckets are absolute** — bucket *n* is uids `n*size+1 .. (n+1)*size`,
+  counted from uid 1. The arithmetic in `src/queue.ts` and the SQL in
+  `src/store.ts` have to agree, so both take the size rather than assuming it.
+  Changing `SYNC_CHUNK_UIDS` moves every boundary and re-enqueues the folder
+  once; the upsert makes that wasteful rather than wrong.
+- **Consumers never write the watermark.** Ranges complete out of order under
+  fan-out, so `max(last_synced_uid, ...)` from a consumer would claim a
+  contiguity that does not exist. Enumeration owns that column.
+- **An auth failure on the queue path acks the batch; it does not retry it.**
+  Re-attempting a revoked password across every consumer at once is faster at
+  locking an Apple ID than the cron path ever was. Nothing is lost — the next
+  tick re-enumerates whatever the batch did not store.
+- **Consumer concurrency is capped at 4** in `wrangler.jsonc`, and that is not
+  timidity: D1 is a single, single-threaded Durable Object, so high fan-out
+  relocates the bottleneck while hammering Apple. Raise it only with a reason.
+- **Enumeration `SEARCH`es on uid ranges and dates and nothing else.** Size and
+  string criteria are unusable against iCloud (`LARGER` matches everything,
+  `SMALLER` nothing, `SUBJECT`/`TEXT`/`FROM` return no hits). A test asserts
+  the criteria object has no other keys, so adding one fails the build.
+- **Reading the watermark instead of re-deriving it is #8.** Enumeration walks
+  from uid 1 every run; gap detection is what makes that cheap, not free.

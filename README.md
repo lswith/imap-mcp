@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)) and the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)) are implemented and tested: the sync worker indexes one folder into D1 on a cron. The MCP server is still a placeholder — nothing is served yet. See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)) and the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) are implemented and tested: the sync worker enumerates folders on a cron and indexes them into D1 through a queue. The MCP server is still a placeholder — nothing is served yet. See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -65,9 +65,10 @@ Everything you would need to supply is named and explained in [`.env.example`](.
 | Route / zone for the MCP worker | a `routes` entry you add to `packages/mcp/wrangler.jsonc` |
 | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | `vars` in `packages/mcp/wrangler.jsonc` |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in `packages/sync/wrangler.jsonc` |
-| `SYNC_FOLDER`, `SYNC_BATCH_SIZE`, `SYNC_CHUNK_SIZE` | `vars` in `packages/sync/wrangler.jsonc`; all optional |
+| `SYNC_FOLDERS` and the four sizing vars | `vars` in `packages/sync/wrangler.jsonc`; all optional |
 | `IMAP_PASSWORD` | `wrangler secret put`, sync worker only — never a `vars` entry |
 | The D1 database | provisioned on first deploy; see [Storage](#storage) |
+| The two queues | created by `wrangler deploy`; **Queues needs a Workers Paid plan** |
 
 Locally, secrets go in a gitignored `.dev.vars` per package; each has a `.dev.vars.example` to copy.
 
@@ -141,25 +142,61 @@ no-op — applied migrations are recorded in a `d1_migrations` table.
 
 ## What the sync worker does
 
-Once an hour, `imap-mcp-sync` connects, opens one folder read-only, fetches a
-bounded range of UIDs from the start of it, reduces each message to a row and
-upserts it into D1. That is the whole of it today: no queue
-([#6](https://github.com/lswith/imap-mcp/issues/6)) and no incremental
-enumeration ([#8](https://github.com/lswith/imap-mcp/issues/8)) yet.
+Once an hour, `imap-mcp-sync` connects and **enumerates**: it opens each
+configured folder read-only, lists UIDs — identifiers only, no bodies — and
+posts them to a Cloudflare Queue in ranges of about a hundred. A **consumer**
+then takes one range per invocation, fetches it over a single IMAP connection,
+reduces each message to a row and upserts it into D1. Incremental enumeration
+([#8](https://github.com/lswith/imap-mcp/issues/8)) is still to come.
 
-Four properties of that run are deliberate, and each is pinned by a test rather
+Three numbers in that shape are load-bearing:
+
+- **A queue message is a UID range, never a single email.** One message per
+  email would mean one TCP + TLS + `LOGIN` + `SELECT` per email — tens of
+  thousands of logins for a backfill, which Apple will throttle or lock long
+  before it finishes. Ranges of ~100 turn that into a few hundred.
+- **Consumer concurrency is capped at 4.** Queues will autoscale to hundreds of
+  parallel consumers, but D1 is a single Durable Object and single-threaded, so
+  high fan-out only relocates the bottleneck — while opening hundreds of
+  connections to one Apple account at the same time.
+- **A cron tick queues at most 50 ranges.** That is the throttle on a backfill:
+  roughly five thousand messages an hour, and a large folder therefore
+  completes over several ticks rather than all at once.
+
+What gets queued is decided by looking for gaps rather than by advancing a
+cursor: one query asks D1 how many messages are already indexed in each UID
+bucket, and only the buckets that come up short are enqueued. A folder
+converges — each run queues what is still missing and then goes quiet — and a
+range that runs out of retries is picked up again on the next tick instead of
+being stepped over for good.
+
+**Enumeration uses UID ranges and dates, and nothing else.** A spike ran sixteen
+`SEARCH` criteria against a real iCloud folder: `ALL`, `SINCE`/`BEFORE` and the
+flag criteria are exact, but `LARGER` matches *everything*, `SMALLER` matches
+*nothing* whatever argument they are given, and every string criterion —
+`SUBJECT`, `TEXT`, `HEADER Subject`, even `FROM "@"` — returns zero hits.
+Whether that is iCloud or the client was never isolated, and the design does not
+depend on the answer.
+
+Five properties of a run are deliberate, and each is pinned by a test rather
 than left as an intention:
 
-- **Nothing it does can change the mailbox.** The folder is opened with
+- **Nothing it does can change the mailbox.** Folders are opened with
   `EXAMINE`, every fetch `PEEK`s — the internal `Mailbox` interface has no way
   to fetch without it — and indexing therefore cannot mark mail as read.
-- **Re-running it writes no duplicate rows.** Every message write is an upsert
-  on `(folder_id, uidvalidity, uid)`, so the same window can be covered again
-  after a failure, a redeploy, or the at-least-once queue delivery of #6.
+- **Redelivering a range writes no duplicate rows.** Every message write is an
+  upsert on `(folder_id, uidvalidity, uid)`, so the same range can be covered
+  again after a failure, a redeploy, or the at-least-once delivery a queue
+  guarantees.
 - **An authentication failure aborts loudly and does not retry.** A revoked
-  app-specific password retried on every tick is how an Apple ID gets locked, so
-  that failure — and a missing setting — calls `noRetry()` and stops. Ordinary
-  failures are left to the next tick.
+  app-specific password retried on every tick — or, worse, across every
+  consumer at once — is how an Apple ID gets locked, so that failure and a
+  missing setting stop the run. On the cron path that means `noRetry()`; on the
+  queue path the batch is acked rather than retried, and the next tick
+  re-enumerates whatever it did not store. Ordinary failures retry.
+- **A range that exhausts its retries lands on a dead-letter queue**, which is
+  read and logged with the folder and UID range it was carrying — so what was
+  missed is a line you can look at rather than a silent hole.
 - **The credential never reaches a log line.** Every line this worker logs is
   scrubbed of the password in all the forms it could come back off the wire —
   plaintext, quoted, and SASL base64 — including error paths.
@@ -183,7 +220,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#3](https://github.com/lswith/imap-mcp/issues/3) | The IMAP client, behind an internal interface |
 | [#4](https://github.com/lswith/imap-mcp/issues/4) | D1 schema and migrations |
 | [#5](https://github.com/lswith/imap-mcp/issues/5) | Tracer: sync one folder into D1 — *done* |
-| [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path |
+| [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path — *done* |
 | [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` |
 | [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` |
 | [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction |
