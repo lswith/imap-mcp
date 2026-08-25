@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: scaffold.** Nothing functional is implemented yet. Both workers are placeholders that install, lint, typecheck, test and pass a deploy dry-run. See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)) and the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)) are implemented and tested. Both workers are still placeholders: nothing syncs and nothing is served yet. See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -46,6 +46,9 @@ pnpm run typecheck   # wrangler types + tsc --noEmit
 pnpm run test        # vitest, inside workerd
 pnpm run dead-code   # knip
 pnpm run build       # wrangler deploy --dry-run, both workers
+
+pnpm run db:migrate:local    # apply migrations/ to the local D1
+pnpm run db:migrate:remote   # ... and to the deployed one
 ```
 
 Per package, from `packages/sync` or `packages/mcp`: `pnpm run dev`, `pnpm run test:watch`, `pnpm run deploy`.
@@ -63,6 +66,7 @@ Everything you would need to supply is named and explained in [`.env.example`](.
 | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | `vars` in `packages/mcp/wrangler.jsonc` |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in `packages/sync/wrangler.jsonc` |
 | `IMAP_PASSWORD` | `wrangler secret put`, sync worker only — never a `vars` entry |
+| The D1 database | provisioned on first deploy; see [Storage](#storage) |
 
 Locally, secrets go in a gitignored `.dev.vars` per package; each has a `.dev.vars.example` to copy.
 
@@ -71,6 +75,68 @@ Locally, secrets go in a gitignored `.dev.vars` per package; each has a `.dev.va
 `workers_dev` and `preview_urls` are `false` in both `wrangler.jsonc` files, and the MCP worker declares no route. A fresh deploy is therefore not reachable from the internet. This is deliberate: with no folder fence, the MCP endpoint is functionally read access to an entire mailbox, so it must not become reachable before Cloudflare Access is in front of it. Without `workers_dev: false` a worker is live at `<name>.<account>.workers.dev` no matter what routes or Access policies exist.
 
 A full deploy-from-scratch guide — secrets, Access setup, bindings, migrations and the backfill — is not written yet; it lands with the rest of the system.
+
+## Storage
+
+One D1 database, written by the sync worker and read by the MCP server. The
+schema is at [`migrations/`](./migrations) in the repo root — shared, rather
+than owned by either worker — and both `wrangler.jsonc` files point their
+`migrations_dir` at it.
+
+| | |
+| --- | --- |
+| `folders` | one row per mailbox, carrying `uidvalidity` and the sync watermark |
+| `messages` | envelope fields plus the normalised plain-text body |
+| `attachments` | metadata and the R2 key; the bytes live in R2 |
+| `write_log` | every mailbox write, successful or not |
+| `messages_fts` | FTS5 over subject and body, BM25-ranked |
+
+Two things in that schema are load-bearing rather than incidental:
+
+- **The plain-text body is a real column, not just FTS index content.** That is
+  the seam that lets semantic search be added later by reading this database,
+  instead of re-pulling fifteen years of mail from iCloud.
+- **Messages are keyed on `(folder, uidvalidity, uid)`**, so every write is an
+  upsert. Queue delivery is at-least-once and consumers have to be safe to
+  re-run. `UIDPLUS` is available on iCloud and every `APPEND` returns an
+  APPENDUID, so that key comes back from the server on each write rather than
+  needing a re-fetch to discover.
+
+`messages_fts` is an FTS5 **external content** table: it indexes `messages`
+rather than holding a second copy of every body, and three triggers keep it in
+step so no write path can forget to reindex. Its tokenizer is
+`porter unicode61 remove_diacritics 2` — stemmed, so "meeting" finds
+"meetings", and diacritic-folded, so "cafe" finds "café". One known limitation,
+pinned by a test rather than left to be rediscovered: `unicode61` does not
+word-segment CJK, so a run like 会議は月曜日です indexes as a single token. It
+stores and reads back exactly; it is keyword search over it that is coarse, and
+a prefix query (`会議*`) is the way through.
+
+### There is no database export
+
+**`wrangler d1 export` refuses to run against any database containing an FTS5
+virtual table**, and this one has `messages_fts`. So there is no working export
+of this database, and no backup taken that way. **Re-running the backfill is the
+recovery path** — which is affordable precisely because the mailbox, not D1, is
+the source of truth: everything here is derived and can be rebuilt from IMAP.
+
+### First deploy
+
+Neither `wrangler.jsonc` commits a `database_id`. A database id identifies one
+Cloudflare account, and this repository commits no account-specific values — so
+the binding declares `database_name` and nothing else, and wrangler
+[provisions it](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning):
+`wrangler dev` creates it locally, `wrangler deploy` creates it on your account,
+binds it, and writes the id back into your copy of the config. It is also what a
+"Deploy to Cloudflare" button would do.
+
+Two things follow. **Both workers must end up on the same database** — deploy
+`imap-mcp-sync` first, then point `imap-mcp-server` at the database that deploy
+created rather than letting it provision a second one. And **the id wrangler
+writes back lands in a committed file**; it is yours, so don't push it upstream.
+
+Then apply the schema with `pnpm run db:migrate:remote`. Re-running it is a
+no-op — applied migrations are recorded in a `d1_migrations` table.
 
 ## Roadmap
 

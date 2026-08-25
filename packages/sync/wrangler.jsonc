@@ -25,13 +25,37 @@
   // internet. preview_urls does the same for versioned preview deploys.
   "workers_dev": false,
   "preview_urls": false,
+  // The index both workers share. One database: the sync worker writes it, the
+  // MCP server reads it.
+  //
+  // No `database_id` is committed, and that is not an omission. Wrangler
+  // provisions a binding that has no resource id -- `wrangler dev` creates it
+  // locally, `wrangler deploy` creates it on the account, links it, and writes
+  // the id back into this file. It is also what a "Deploy to Cloudflare" button
+  // does server-side. So this repo stays free of account-specific values while
+  // still declaring everything a deploy needs.
+  //
+  // Two things to know when you deploy (see README.md):
+  //   - Both workers must end up on the SAME database. Provisioning them
+  //     independently creates two. Deploy this worker first, then point
+  //     imap-mcp-server at the database this deploy created.
+  //   - The id wrangler writes back into this committed file is yours. Don't
+  //     push it upstream.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "imap-mcp",
+      // Repo root, shared by both workers -- one schema, two consumers.
+      "migrations_dir": "../../migrations"
+    }
+  ],
   // Hourly, on the hour. Cron is UTC but the cadence is timezone-agnostic.
   "triggers": { "crons": ["0 * * * *"] }
   //
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
   //   vars        -- IMAP_HOST / IMAP_PORT / IMAP_USER (see ../../.env.example)
-  //   d1_databases, queues, r2_buckets -- #4, #6, #9
+  //   queues, r2_buckets -- #6, #9
   //
   // Secrets (set with `pnpm exec wrangler secret put`):
   //   IMAP_PASSWORD -- app-specific password, full mailbox access incl. SMTP send

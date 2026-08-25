@@ -27,13 +27,37 @@
   // (#10). Without workers_dev: false it would be live at
   // <name>.<account>.workers.dev regardless of any route or Access policy.
   "workers_dev": false,
-  "preview_urls": false
+  "preview_urls": false,
+  // The index both workers share. One database: the sync worker writes it, the
+  // MCP server reads it.
+  //
+  // No `database_id` is committed, and that is not an omission. Wrangler
+  // provisions a binding that has no resource id -- `wrangler dev` creates it
+  // locally, `wrangler deploy` creates it on the account, links it, and writes
+  // the id back into this file. It is also what a "Deploy to Cloudflare" button
+  // does server-side. So this repo stays free of account-specific values while
+  // still declaring everything a deploy needs.
+  //
+  // Two things to know when you deploy (see README.md):
+  //   - Both workers must end up on the SAME database. Provisioning them
+  //     independently creates two. Deploy imap-mcp-sync first, then point this
+  //     worker at the database that deploy created.
+  //   - The id wrangler writes back into this committed file is yours. Don't
+  //     push it upstream.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "imap-mcp",
+      // Repo root, shared by both workers -- one schema, two consumers.
+      "migrations_dir": "../../migrations"
+    }
+  ]
   //
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
   //   routes      -- your own zone; see MCP_ZONE_NAME in ../../.env.example
   //   vars        -- ACCESS_TEAM_DOMAIN / ACCESS_AUD (#10)
-  //   d1_databases, r2_buckets -- #4, #9
+  //   r2_buckets  -- #9
   //   services    -- binding to imap-mcp-sync for writes (#12)
   //
   // This worker holds no IMAP credential, by design, and should never be given
