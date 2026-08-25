@@ -1,0 +1,27 @@
+name: Validate Workflows
+
+# Lints every file in .github/workflows/ with actionlint, which parses the YAML
+# and checks it against the GitHub Actions schema (job/step structure,
+# expression syntax, shellcheck on run: blocks). Catches malformed workflow
+# YAML before it merges and starts silently failing to trigger.
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/**']
+  workflow_dispatch: {}
+
+concurrency:
+  group: validate-workflows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@v1
+        with:
+          fail_level: error

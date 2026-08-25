@@ -1,0 +1,24 @@
+# Both deployable workers live under packages/.
+packages:
+  - packages/*
+
+# Minimum dependency release age (minutes): 5760 = 4 days. pnpm enforces this
+# natively at every install, including --frozen-lockfile in CI, giving new
+# releases time in the wild for supply-chain compromises to surface and get
+# pulled before this repo adopts them. .github/dependabot.yml carries a
+# matching 4-day cooldown so its PRs arrive already passing the gate.
+#
+# Override for an urgent security fix: add the exact name@version to
+# minimumReleaseAgeExclude in the fixing PR (auditable, committed), and remove
+# the entry once the version has aged out. A bare package name would exempt
+# every version of it, so always pin the version.
+minimumReleaseAge: 5760
+
+# pnpm blocks dependency postinstall scripts by default; these genuinely
+# need theirs (platform binaries).
+allowBuilds:
+  # Pulled in by miniflare (via wrangler and @cloudflare/vitest-pool-workers)
+  # for the Images binding.
+  sharp: true
+  esbuild: true
+  workerd: true

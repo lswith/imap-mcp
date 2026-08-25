@@ -1,0 +1,38 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "imap-mcp-sync",
+  "main": "src/index.ts",
+  // Pinned to the newest date the toolchain actually runs: the workerd bundled
+  // with @cloudflare/vitest-pool-workers caps out here, and a later date makes
+  // every test fail to boot rather than fail a check. Move it forward only
+  // together with that dependency.
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  // `logs.invocation_logs` groups every console.log/error emitted during a run
+  // into a single timeline in the dashboard (Workers & Pages -> this worker ->
+  // Logs) -- the "breadcrumbs" behind an error, at 100% sampling.
+  // `upload_source_maps` makes `wrangler deploy` bundle real source maps so
+  // exception stack traces in that dashboard resolve back to this TypeScript,
+  // not minified/bundled JS.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": true, "head_sampling_rate": 1 }
+  },
+  "upload_source_maps": true,
+  // Background cron worker with no public routes. workers_dev must stay false:
+  // without it the worker is also live at <name>.<account>.workers.dev, which
+  // would expose a worker holding full mailbox credentials on the open
+  // internet. preview_urls does the same for versioned preview deploys.
+  "workers_dev": false,
+  "preview_urls": false,
+  // Hourly, on the hour. Cron is UTC but the cadence is timezone-agnostic.
+  "triggers": { "crons": ["0 * * * *"] }
+  //
+  // Not committed, and deliberately absent until the tickets that need them:
+  //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
+  //   vars        -- IMAP_HOST / IMAP_PORT / IMAP_USER (see ../../.env.example)
+  //   d1_databases, queues, r2_buckets -- lswith/lswith.io#130, #132, #135
+  //
+  // Secrets (set with `pnpm exec wrangler secret put`):
+  //   IMAP_PASSWORD -- app-specific password, full mailbox access incl. SMTP send
+}

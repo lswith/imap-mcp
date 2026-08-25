@@ -1,0 +1,41 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "imap-mcp-server",
+  "main": "src/index.ts",
+  // Pinned to the newest date the toolchain actually runs: the workerd bundled
+  // with @cloudflare/vitest-pool-workers caps out here, and a later date makes
+  // every test fail to boot rather than fail a check. Move it forward only
+  // together with that dependency.
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  // `logs.invocation_logs` groups every console.log/error emitted during a
+  // request into a single timeline in the dashboard (Workers & Pages -> this
+  // worker -> Logs) -- the "breadcrumbs" behind an error, at 100% sampling.
+  // `upload_source_maps` makes `wrangler deploy` bundle real source maps so
+  // exception stack traces in that dashboard resolve back to this TypeScript,
+  // not minified/bundled JS.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": true, "head_sampling_rate": 1 }
+  },
+  "upload_source_maps": true,
+  // No route is declared, and workers_dev + preview_urls are both false, so a
+  // deploy of this worker is not reachable from the internet at all. That is
+  // deliberate and load-bearing: with no folder fence, this endpoint is
+  // functionally read access to the entire mailbox, so it must not become
+  // reachable before Cloudflare Access sits in front of it
+  // (lswith/lswith.io#136). Without workers_dev: false it would be live at
+  // <name>.<account>.workers.dev regardless of any route or Access policy.
+  "workers_dev": false,
+  "preview_urls": false
+  //
+  // Not committed, and deliberately absent until the tickets that need them:
+  //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
+  //   routes      -- your own zone; see MCP_ZONE_NAME in ../../.env.example
+  //   vars        -- ACCESS_TEAM_DOMAIN / ACCESS_AUD (lswith/lswith.io#136)
+  //   d1_databases, r2_buckets -- lswith/lswith.io#130, #135
+  //   services    -- binding to imap-mcp-sync for writes (lswith/lswith.io#138)
+  //
+  // This worker holds no IMAP credential, by design, and should never be given
+  // one: writes reach the sync worker over a service binding instead.
+}
