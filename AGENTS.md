@@ -60,6 +60,6 @@ pnpm run deploy      # wrangler deploy
 ## Status
 
 Scaffold only. Nothing functional is implemented. The build is tracked as
-issues on `lswith/lswith.io` (#127–#139) rather than here, because the plan was
-written before this repository existed: #129 vendors the IMAP client, #130 the
-D1 schema, #131 the tracer sync, #133 the MCP server, #136 Access.
+issues on this repo: #3 vendors the IMAP client, #4 the D1 schema, #5 the
+tracer sync, #7 the MCP server, #10 Access. See the roadmap table in
+README.md for the full list.

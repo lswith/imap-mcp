@@ -72,23 +72,24 @@ A full deploy-from-scratch guide — secrets, Access setup, bindings, migrations
 
 ## Roadmap
 
-Tracked as issues on [`lswith/lswith.io`](https://github.com/lswith/lswith.io/issues) rather than here, since the plan predates this repository:
+Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 
 | | |
 | --- | --- |
-| [#127](https://github.com/lswith/lswith.io/issues/127) | Spike: prove IMAP works from a Worker — **answered, GO** |
-| [#128](https://github.com/lswith/lswith.io/issues/128) | Repo scaffold — *this* |
-| [#129](https://github.com/lswith/lswith.io/issues/129) | Vendor the IMAP client behind an internal interface |
-| [#130](https://github.com/lswith/lswith.io/issues/130) | D1 schema and migrations |
-| [#131](https://github.com/lswith/lswith.io/issues/131) | Tracer: sync one folder into D1 |
-| [#132](https://github.com/lswith/lswith.io/issues/132) | Queue fan-out for the sync path |
-| [#133](https://github.com/lswith/lswith.io/issues/133) | MCP server and `search_messages` |
-| [#134](https://github.com/lswith/lswith.io/issues/134) | Incremental sync: watermarks and `UIDVALIDITY` |
-| [#135](https://github.com/lswith/lswith.io/issues/135) | Attachments to R2, with text extraction |
-| [#136](https://github.com/lswith/lswith.io/issues/136) | Gate the MCP endpoint with Access Managed OAuth |
-| [#137](https://github.com/lswith/lswith.io/issues/137) | `get_message` and `get_thread` |
-| [#138](https://github.com/lswith/lswith.io/issues/138) | Write tools over a service binding, with an audit log |
-| [#139](https://github.com/lswith/lswith.io/issues/139) | Full backfill and setup guide |
+| [#2](https://github.com/lswith/imap-mcp/issues/2) | Repo scaffold — *this* |
+| [#3](https://github.com/lswith/imap-mcp/issues/3) | Vendor the IMAP client behind an internal interface |
+| [#4](https://github.com/lswith/imap-mcp/issues/4) | D1 schema and migrations |
+| [#5](https://github.com/lswith/imap-mcp/issues/5) | Tracer: sync one folder into D1 |
+| [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path |
+| [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` |
+| [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` |
+| [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction |
+| [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth |
+| [#11](https://github.com/lswith/imap-mcp/issues/11) | `get_message` and `get_thread` |
+| [#12](https://github.com/lswith/imap-mcp/issues/12) | Write tools over a service binding, with an audit log |
+| [#13](https://github.com/lswith/imap-mcp/issues/13) | Full backfill and setup guide |
+
+A spike settled the one question the whole architecture was contingent on — **can a Cloudflare Worker speak IMAP to iCloud at all?** It can: TLS and `LOGIN` on port 993 in 755 ms, folders listed, messages fetched and MIME-decoded, a draft appended and flagged. So the sync path is a Worker and nothing moves to a Container. The findings that constrain the design — CONDSTORE ordering, no `MOVE` on iCloud, `SEARCH` being unusable for content — are written into the tickets they affect.
 
 ## Licence
 

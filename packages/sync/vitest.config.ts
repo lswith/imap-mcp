@@ -19,7 +19,7 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       // No thresholds yet: the only code here is a placeholder handler, so any
       // number would be either trivially 100% or arbitrary. Set a real ratchet
-      // when the tracer lands (lswith/lswith.io#131) and raise it from there,
+      // when the tracer lands (#5) and raise it from there,
       // never lower it to make a red build pass.
     },
   },

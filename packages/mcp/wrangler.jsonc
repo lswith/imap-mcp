@@ -24,7 +24,7 @@
   // deliberate and load-bearing: with no folder fence, this endpoint is
   // functionally read access to the entire mailbox, so it must not become
   // reachable before Cloudflare Access sits in front of it
-  // (lswith/lswith.io#136). Without workers_dev: false it would be live at
+  // (#10). Without workers_dev: false it would be live at
   // <name>.<account>.workers.dev regardless of any route or Access policy.
   "workers_dev": false,
   "preview_urls": false
@@ -32,9 +32,9 @@
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
   //   routes      -- your own zone; see MCP_ZONE_NAME in ../../.env.example
-  //   vars        -- ACCESS_TEAM_DOMAIN / ACCESS_AUD (lswith/lswith.io#136)
-  //   d1_databases, r2_buckets -- lswith/lswith.io#130, #135
-  //   services    -- binding to imap-mcp-sync for writes (lswith/lswith.io#138)
+  //   vars        -- ACCESS_TEAM_DOMAIN / ACCESS_AUD (#10)
+  //   d1_databases, r2_buckets -- #4, #9
+  //   services    -- binding to imap-mcp-sync for writes (#12)
   //
   // This worker holds no IMAP credential, by design, and should never be given
   // one: writes reach the sync worker over a service binding instead.

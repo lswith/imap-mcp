@@ -19,7 +19,7 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       // No thresholds yet: the only code here is a placeholder handler, so any
       // number would be either trivially 100% or arbitrary. Set a real ratchet
-      // when search_messages lands (lswith/lswith.io#133) and raise it from there,
+      // when search_messages lands (#7) and raise it from there,
       // never lower it to make a red build pass.
     },
   },

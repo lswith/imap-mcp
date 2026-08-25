@@ -8,11 +8,11 @@
  *
  * Nothing is implemented yet. The cron handler exists so the worker has a
  * valid entry point and a deploy dry-run passes; the real work lands with the
- * tracer (lswith/lswith.io#131), which connects, selects one folder, fetches a
- * bounded UID range and writes to D1. Queue fan-out follows in #132.
+ * tracer (#5), which connects, selects one folder, fetches a bounded UID range
+ * and writes to D1. Queue fan-out follows in #6.
  */
 export default {
   async scheduled(_controller: ScheduledController, _env: Env, _ctx: ExecutionContext) {
-    console.log("imap-mcp-sync: no sync implemented yet (lswith/lswith.io#131)");
+    console.log("imap-mcp-sync: no sync implemented yet (#5)");
   },
 } satisfies ExportedHandler<Env>;

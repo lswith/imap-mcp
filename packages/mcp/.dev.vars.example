@@ -1,6 +1,6 @@
 # Local secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored).
 #
 # This worker deliberately holds no IMAP credential — the sync worker owns it,
-# and writes reach that worker over a service binding (lswith/lswith.io#138).
+# and writes reach that worker over a service binding (#12).
 # Nothing here yet; the file exists so the pattern is obvious when Access
-# configuration lands (lswith/lswith.io#136).
+# configuration lands (#10).

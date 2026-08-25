@@ -31,7 +31,7 @@
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
   //   vars        -- IMAP_HOST / IMAP_PORT / IMAP_USER (see ../../.env.example)
-  //   d1_databases, queues, r2_buckets -- lswith/lswith.io#130, #132, #135
+  //   d1_databases, queues, r2_buckets -- #4, #6, #9
   //
   // Secrets (set with `pnpm exec wrangler secret put`):
   //   IMAP_PASSWORD -- app-specific password, full mailbox access incl. SMTP send
