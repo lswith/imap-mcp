@@ -15,9 +15,21 @@
  *     of re-fetching everything hourly for ever.
  *   - A range that dead-letters is picked up again next run. A cursor would
  *     step over it permanently.
- *   - The sync watermark (#8) stays honest. Ranges complete out of order under
+ *   - The sync watermark stays honest. Ranges complete out of order under
  *     fan-out, so "highest uid stored" would claim more than is true; the
  *     highest uid below the first gap does not.
+ *
+ * That watermark is what a run now RESUMES from (#8): the walk starts above it
+ * rather than at uid 1, and gap detection is scoped to the same floor. A folder
+ * whose watermark has reached the top of its uid space is skipped without a
+ * single SEARCH — which is the difference between an hourly tick that converges
+ * and one that is actually cheap. Gap detection still does the work above the
+ * watermark, so a dead-lettered range in that region still comes back.
+ *
+ * CONDSTORE is enabled for the session (src/session.ts) and confirmed per
+ * folder by HIGHESTMODSEQ appearing, never by the ENABLE reply. Nothing reads a
+ * mod-sequence yet; recording it is what a later flag-reconciliation pass
+ * starts from.
  *
  * SEARCH is used for uid ranges and dates only. A spike found `LARGER` matching
  * everything, `SMALLER` matching nothing, and every string criterion returning
@@ -47,6 +59,8 @@ type FolderEnumeration = {
   uidValidity: number;
   /** Messages the folder holds, from EXISTS. */
   exists: number;
+  /** The watermark this run resumed above. */
+  resumedFrom: number;
   /** Uids seen in the windows this run walked. */
   scanned: number;
   /** Ranges posted to the queue. */
@@ -57,6 +71,8 @@ type FolderEnumeration = {
 
 export type EnumerateResult = {
   folders: FolderEnumeration[];
+  /** Configured folders the server no longer has. Warned about, not fatal. */
+  missing: string[];
   enqueued: number;
   durationMs: number;
 };
@@ -72,14 +88,29 @@ export async function runEnumerate(env: Env, deps: SyncDeps = {}): Promise<Enume
   const share = Math.max(1, Math.floor(config.maxChunksPerRun / config.folders.length));
 
   const folders: FolderEnumeration[] = [];
+  const missing: string[] = [];
   let failure: unknown;
 
   await withMailbox(config, deps, log, async (mailbox) => {
+    // One LIST for the run. A folder deleted or renamed upstream is a fact
+    // about the server, not a failure of this worker, and it has to be told
+    // apart from every other tagged NO a SELECT can answer with — which the
+    // error alone cannot do.
+    const present = new Set((await mailbox.listFolders()).map((folder) => folder.name));
+
     for (const name of config.folders) {
+      if (!present.has(name)) {
+        // Skipped entirely: no row created, no watermark written, existing rows
+        // left alone. A folder that came back would resume where it left off; a
+        // renamed one indexes afresh under its new name.
+        log.warn(`${name}: not on the server — deleted, renamed, or misconfigured; skipping`);
+        missing.push(name);
+        continue;
+      }
       try {
         folders.push(await enumerateFolder(env, mailbox, queue, config, log, name, share));
       } catch (error) {
-        // Every folder is attempted — one renamed folder should not stop the
+        // Every folder is attempted — one broken folder should not stop the
         // others indexing — but the run still ends in failure, so a folder
         // that is permanently wrong shows up as a red tick rather than as a
         // quiet gap in the index.
@@ -93,6 +124,7 @@ export async function runEnumerate(env: Env, deps: SyncDeps = {}): Promise<Enume
 
   return {
     folders,
+    missing,
     enqueued: folders.reduce((total, folder) => total + folder.enqueued, 0),
     durationMs: Date.now() - startedAt,
   };
@@ -113,25 +145,37 @@ async function enumerateFolder(
   const uidValidity = state.uidValidity ?? 0;
   const folder = await upsertFolder(env.DB, state);
 
+  // Presence, not the ENABLE reply: iCloud confirms an empty list while plainly
+  // having enabled CONDSTORE, and an ENABLE issued after the first SELECT is
+  // accepted and does nothing. An absent HIGHESTMODSEQ is the only symptom
+  // either way, so it is what gets checked.
+  if (state.highestModSeq === undefined || state.noModSeq) {
+    log.warn(`${name}: no HIGHESTMODSEQ — CONDSTORE is not in effect for this folder`);
+  }
+
+  let resumeFrom = folder.watermark;
+
   if (folder.previousUidValidity !== null && folder.previousUidValidity !== uidValidity) {
     // Loud, because every uid recorded under the old value now means something
-    // else. #8 owns the re-sync; what this run does is refuse to carry a
-    // watermark across the discontinuity — and, because gap detection counts
-    // only rows under the new uidvalidity, re-enqueue the folder from scratch.
+    // else. The watermark counted those uids, so it cannot be resumed from —
+    // and because gap detection counts only rows under the new uidvalidity, the
+    // folder re-enqueues from scratch.
     log.warn(
       `${name}: UIDVALIDITY changed from ${folder.previousUidValidity} to ${uidValidity} — ` +
-        `previously indexed uids are stale until a full re-sync (#8)`,
+        `previously indexed uids are stale; re-syncing the folder from uid 1`,
     );
     await resetSyncWatermark(env.DB, folder.id);
+    resumeFrom = 0;
   }
 
   const enumeration: FolderEnumeration = {
     folder: name,
     uidValidity,
     exists: state.exists,
+    resumedFrom: resumeFrom,
     scanned: 0,
     enqueued: 0,
-    watermark: 0,
+    watermark: resumeFrom,
   };
 
   if (state.exists === 0) {
@@ -139,12 +183,34 @@ async function enumerateFolder(
     return enumeration;
   }
 
-  const indexed = await indexedBuckets(env.DB, folder.id, uidValidity, config.chunkUids);
-  const highestUid = state.uidNext ?? MAX_UID;
+  // The highest uid the folder can hold. A watermark that has reached it means
+  // everything is indexed, so the run ends here without a single SEARCH — the
+  // quiet-tick case, and the point of the whole ticket. The one case it does
+  // not catch is a folder whose newest uid was deleted upstream: the watermark
+  // then sits one short for good and each run spends one empty SEARCH. That is
+  // cheaper than the mechanism it would take to avoid.
+  const uidCeiling = state.uidNext ? state.uidNext - 1 : MAX_UID;
+  if (resumeFrom >= uidCeiling) {
+    await recordSyncWatermark(env.DB, folder.id, resumeFrom, Date.now());
+    return enumeration;
+  }
+
+  const indexed = await indexedBuckets(
+    env.DB,
+    folder.id,
+    uidValidity,
+    config.chunkUids,
+    resumeFrom,
+  );
   const pending: SyncChunk[] = [];
   let sawGap = false;
 
-  for (let from = 1; from <= highestUid && enumeration.scanned < state.exists; ) {
+  // Bounded by uid space rather than by EXISTS. Counting scanned uids against
+  // EXISTS was right when every run started at uid 1; resuming breaks it,
+  // because EXISTS counts what the folder holds now and the rows below the
+  // watermark count what D1 holds — and a message deleted upstream makes the
+  // second larger, ending the walk before it reached anything new.
+  for (let from = resumeFrom + 1; from <= uidCeiling; ) {
     const to = Math.min(from + config.enumerateWindow - 1, MAX_UID);
     const uids = (await mailbox.search(window(from, to, config))).sort((a, b) => a - b);
     enumeration.scanned += uids.length;
@@ -180,7 +246,7 @@ async function enumerateFolder(
     }
 
     if (budgetSpent) break;
-    if (to === MAX_UID) break;
+    if (to >= MAX_UID) break;
     from = to + 1;
   }
 
@@ -224,9 +290,11 @@ export function summariseEnumeration(result: EnumerateResult): string {
   const folders = result.folders
     .map(
       (folder) =>
-        `${folder.folder}: ${folder.scanned} uids, ${folder.enqueued} ranges queued ` +
+        `${folder.folder}: ${folder.scanned} uids from ${folder.resumedFrom + 1}, ` +
+        `${folder.enqueued} ranges queued ` +
         `(uidvalidity ${folder.uidValidity}, watermark ${folder.watermark})`,
     )
     .join("; ");
-  return `${folders} — ${result.enqueued} ranges in ${result.durationMs}ms`;
+  const missing = result.missing.length ? `; missing: ${result.missing.join(", ")}` : "";
+  return `${folders}${missing} — ${result.enqueued} ranges in ${result.durationMs}ms`;
 }

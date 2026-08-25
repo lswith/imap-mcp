@@ -14,9 +14,9 @@
  * contiguity that does not exist; enumeration owns that column instead.
  */
 
-import type { Mailbox, MailboxMessage } from "@imap-mcp/imap";
+import type { FolderState, Mailbox, MailboxMessage } from "@imap-mcp/imap";
 import type { SyncConfig } from "./config";
-import type { Logger } from "./log";
+import { describeError, type Logger } from "./log";
 import { toMessageRow } from "./normalise";
 import type { SyncChunk } from "./queue";
 import { upsertMessages } from "./store";
@@ -24,7 +24,11 @@ import { upsertMessages } from "./store";
 export type ChunkOutcome = {
   /** Rows written. */
   stored: number;
-  /** The folder was renumbered after enumeration, so the range was dropped. */
+  /**
+   * The range no longer describes anything that exists — the folder was
+   * renumbered after enumeration, or is gone from the server altogether — so
+   * it was dropped rather than retried.
+   */
   stale: boolean;
 };
 
@@ -35,7 +39,20 @@ export async function consumeChunk(
   config: SyncConfig,
   log: Logger,
 ): Promise<ChunkOutcome> {
-  const state = await mailbox.selectFolder(chunk.folder, { readOnly: true });
+  let state: FolderState;
+  try {
+    state = await mailbox.selectFolder(chunk.folder, { readOnly: true });
+  } catch (error) {
+    // A tagged NO on SELECT looks the same whether the folder is gone or the
+    // server is merely unhappy, so ask. Only on this path: it costs a LIST, and
+    // it buys not spending three retries and a dead-letter slot on a folder
+    // that is not coming back under this name.
+    if (await stillThere(mailbox, chunk.folder, log)) throw error;
+    log.warn(
+      `${chunk.folder}: not on the server — dropping uids ${chunk.from}:${chunk.to} as stale`,
+    );
+    return { stored: 0, stale: true };
+  }
   const uidValidity = state.uidValidity ?? 0;
 
   if (uidValidity !== chunk.uidValidity) {
@@ -63,6 +80,23 @@ export async function consumeChunk(
   }
 
   return { stored, stale: false };
+}
+
+/**
+ * Whether the server still lists this folder.
+ *
+ * A LIST that itself fails says nothing about the folder, so it resolves to
+ * "still there" and the original failure is the one that reaches the caller —
+ * a range must never be dropped on the strength of a question that went
+ * unanswered.
+ */
+async function stillThere(mailbox: Mailbox, name: string, log: Logger): Promise<boolean> {
+  try {
+    return (await mailbox.listFolders()).some((folder) => folder.name === name);
+  } catch (error) {
+    log.warn(`${name}: could not list folders to check whether it exists: ${describeError(error)}`);
+    return true;
+  }
 }
 
 function slices(uids: readonly number[], size: number): number[][] {

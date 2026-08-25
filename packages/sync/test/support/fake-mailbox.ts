@@ -30,16 +30,27 @@ type FakeFolder = {
   uidValidity?: number;
   uidNext?: number;
   highestModSeq?: number;
+  /**
+   * The server reported NOMODSEQ: CONDSTORE is not in effect for this folder.
+   * A separate option rather than `highestModSeq: undefined`, because the
+   * default has to model the ordinary case — ENABLE CONDSTORE landed and the
+   * folder answers with one.
+   */
+  noModSeq?: boolean;
   messages?: MailboxMessage[];
 };
 
 /** One folder, or several. `messages` alone means a single folder named Archive. */
 export type FakeMailboxOptions = FakeFolder & { folders?: FakeFolder[] };
 
-type Folder = Required<Omit<FakeFolder, "uidNext" | "highestModSeq">> & {
+type Folder = Required<Omit<FakeFolder, "uidNext" | "highestModSeq" | "noModSeq">> & {
   uidNext?: number;
   highestModSeq?: number;
+  noModSeq: boolean;
 };
+
+/** Any non-zero value: what matters is that HIGHESTMODSEQ came back at all. */
+const DEFAULT_MODSEQ = 4242;
 
 export class FakeMailbox implements Mailbox {
   readonly capabilities = ["IMAP4rev1", "UIDPLUS", "CONDSTORE"];
@@ -60,7 +71,8 @@ export class FakeMailbox implements Mailbox {
       name: folder.name ?? "Archive",
       uidValidity: folder.uidValidity ?? 100,
       uidNext: folder.uidNext,
-      highestModSeq: folder.highestModSeq,
+      highestModSeq: folder.noModSeq ? undefined : (folder.highestModSeq ?? DEFAULT_MODSEQ),
+      noModSeq: folder.noModSeq === true,
       messages: folder.messages ?? [],
     }));
   }
@@ -73,6 +85,11 @@ export class FakeMailbox implements Mailbox {
   /** Renumbers a folder, the way a server-side restore does. */
   setUidValidity(uidValidity: number, name = "Archive"): void {
     this.#folder(name).uidValidity = uidValidity;
+  }
+
+  /** Deletes or renames a folder away, the way a mail client does. */
+  removeFolder(name: string): void {
+    this.#folders = this.#folders.filter((folder) => folder.name !== name);
   }
 
   async listFolders(): Promise<MailboxFolder[]> {
@@ -94,7 +111,7 @@ export class FakeMailbox implements Mailbox {
       uidNext: folder.uidNext ?? highestUid(folder) + 1,
       uidValidity: folder.uidValidity,
       highestModSeq: folder.highestModSeq,
-      noModSeq: folder.highestModSeq === undefined,
+      noModSeq: folder.noModSeq,
       flags: ["Seen", "Flagged"],
       permanentFlags: ["Seen", "Flagged"],
       readOnly: options.readOnly === true,

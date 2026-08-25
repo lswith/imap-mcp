@@ -18,14 +18,15 @@ function syncEnv(queue: FakeQueue, overrides: Partial<Env> = {}): Env {
 type FolderRow = {
   id: number;
   uidValidity: number;
+  highestModSeq: number | null;
   lastSyncedUid: number;
   lastSyncedAt: number | null;
 };
 
 async function folderRow(name = "Archive"): Promise<FolderRow | null> {
   return env.DB.prepare(
-    `SELECT id, uidvalidity AS uidValidity, last_synced_uid AS lastSyncedUid,
-            last_synced_at AS lastSyncedAt
+    `SELECT id, uidvalidity AS uidValidity, highest_modseq AS highestModSeq,
+            last_synced_uid AS lastSyncedUid, last_synced_at AS lastSyncedAt
      FROM folders WHERE name = ?`,
   )
     .bind(name)
@@ -270,23 +271,157 @@ describe("enumeration", () => {
   });
 
   it("attempts every folder when one of them fails, and still fails the run", async () => {
-    // A folder renamed in the mail client should not stop the others indexing
-    // — but a folder that is permanently wrong should show up as a red tick
-    // rather than as a quiet gap in the index.
-    const mailbox = new FakeMailbox({ folders: [{ name: "Archive", messages: [fakeMessage(1)] }] });
+    // A folder that fails for a reason other than being gone should not stop
+    // the others indexing — but it should show up as a red tick rather than as
+    // a quiet gap in the index.
+    const mailbox = new FakeMailbox({
+      folders: [
+        { name: "Broken", messages: [fakeMessage(1)] },
+        { name: "Archive", messages: [fakeMessage(1)] },
+      ],
+    });
+    vi.spyOn(mailbox, "selectFolder").mockImplementation(async function (this: FakeMailbox, name) {
+      if (name === "Broken") throw new Error("server said NO");
+      return FakeMailbox.prototype.selectFolder.call(this, name, { readOnly: true });
+    });
     const queue = new FakeQueue();
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
-      runEnumerate(syncEnv(queue, { SYNC_FOLDERS: "Nonexistent,Archive" }), {
+      runEnumerate(syncEnv(queue, { SYNC_FOLDERS: "Broken,Archive" }), {
         connect: async () => mailbox,
       }),
-    ).rejects.toThrow(/Nonexistent/);
+    ).rejects.toThrow(/server said NO/);
 
     const logged = error.mock.calls.map(String).join("\n");
     error.mockRestore();
-    expect(logged).toContain("Nonexistent: enumeration failed");
+    expect(logged).toContain("Broken: enumeration failed");
     expect(ranges(queue.sent)).toEqual(["Archive 1:10"]);
+  });
+});
+
+describe("incremental enumeration (#8)", () => {
+  it("resumes above the watermark rather than walking the folder from uid 1", async () => {
+    const messages = Array.from({ length: 25 }, (_, index) => fakeMessage(index + 1));
+    const mailbox = new FakeMailbox({ messages });
+
+    // A first run with everything up to uid 20 already indexed leaves a
+    // watermark of 20; the second run is the one under test.
+    await runEnumerate(syncEnv(new FakeQueue()), { connect: async () => mailbox });
+    const folder = await folderRow();
+    await alreadyIndexed(
+      folder!.id,
+      100,
+      Array.from({ length: 20 }, (_, index) => index + 1),
+    );
+    await runEnumerate(syncEnv(new FakeQueue()), { connect: async () => mailbox });
+    expect((await folderRow())!.lastSyncedUid).toBe(20);
+
+    const queue = new FakeQueue();
+    mailbox.searches.length = 0;
+    await runEnumerate(syncEnv(queue, { SYNC_ENUMERATE_WINDOW: "10" }), {
+      connect: async () => mailbox,
+    });
+
+    // Nothing below the watermark is searched again, and nothing below it is
+    // re-enqueued.
+    expect(mailbox.searches.map((criteria) => criteria.uids)).toEqual([{ from: 21, to: 30 }]);
+    expect(ranges(queue.sent)).toEqual(["Archive 21:30"]);
+  });
+
+  it("issues no SEARCH at all when the watermark is already at the top of the folder", async () => {
+    const messages = Array.from({ length: 25 }, (_, index) => fakeMessage(index + 1));
+    const mailbox = new FakeMailbox({ messages });
+
+    await runEnumerate(syncEnv(new FakeQueue()), { connect: async () => mailbox });
+    const folder = await folderRow();
+    await alreadyIndexed(
+      folder!.id,
+      100,
+      messages.map((message) => message.uid),
+    );
+    await runEnumerate(syncEnv(new FakeQueue()), { connect: async () => mailbox });
+    expect((await folderRow())!.lastSyncedUid).toBe(25);
+
+    const queue = new FakeQueue();
+    mailbox.searches.length = 0;
+    const before = (await folderRow())!.lastSyncedAt;
+    const result = await runEnumerate(syncEnv(queue), { connect: async () => mailbox });
+
+    // One EXAMINE, no SEARCH, no work. This is what makes a quiet hourly tick
+    // cheap rather than merely convergent.
+    expect(mailbox.searches).toEqual([]);
+    expect(queue.sent).toEqual([]);
+    expect(result.enqueued).toBe(0);
+    expect((await folderRow())!.lastSyncedAt).toBeGreaterThanOrEqual(before!);
+  });
+
+  it("skips a folder that is gone from the server without failing the run", async () => {
+    const mailbox = new FakeMailbox({
+      folders: [
+        { name: "Archive", messages: [fakeMessage(1)] },
+        { name: "Ghost", messages: [fakeMessage(1)] },
+      ],
+    });
+    mailbox.removeFolder("Ghost");
+    const queue = new FakeQueue();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await runEnumerate(syncEnv(queue, { SYNC_FOLDERS: "Ghost,Archive" }), {
+      connect: async () => mailbox,
+    });
+
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(warnings).toContain("Ghost");
+    // Never selected, never recorded — and the rest of the mailbox still indexes.
+    expect(mailbox.selects.map((select) => select.name)).toEqual(["Archive"]);
+    expect(await folderRow("Ghost")).toBeNull();
+    expect(ranges(queue.sent)).toEqual(["Archive 1:10"]);
+    expect(result.missing).toEqual(["Ghost"]);
+  });
+
+  it("does not resume above a watermark that a UIDVALIDITY change invalidated", async () => {
+    const messages = Array.from({ length: 25 }, (_, index) => fakeMessage(index + 1));
+    const mailbox = new FakeMailbox({ uidValidity: 100, messages });
+    await runEnumerate(syncEnv(new FakeQueue()), { connect: async () => mailbox });
+    const folder = await folderRow();
+    await alreadyIndexed(
+      folder!.id,
+      100,
+      messages.map((message) => message.uid),
+    );
+    await runEnumerate(syncEnv(new FakeQueue()), { connect: async () => mailbox });
+    expect((await folderRow())!.lastSyncedUid).toBe(25);
+
+    mailbox.setUidValidity(101);
+    const queue = new FakeQueue();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mailbox.searches.length = 0;
+    await runEnumerate(syncEnv(queue), { connect: async () => mailbox });
+    warn.mockRestore();
+
+    // The watermark counted uids that now mean something else, so the walk
+    // starts at 1 again rather than at 26 — and the whole folder is re-enqueued
+    // under the new value.
+    expect(mailbox.searches[0]!.uids).toMatchObject({ from: 1 });
+    expect(queue.sent.every((chunk) => chunk.uidValidity === 101)).toBe(true);
+    expect(ranges(queue.sent)).toEqual(["Archive 1:10", "Archive 11:20", "Archive 21:30"]);
+  });
+
+  it("warns when a folder comes back without HIGHESTMODSEQ", async () => {
+    // The silent failure this guards: ENABLE CONDSTORE issued after the first
+    // SELECT is accepted and does nothing, and the only symptom is the absent
+    // HIGHESTMODSEQ.
+    const mailbox = new FakeMailbox({ noModSeq: true, messages: [fakeMessage(1)] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await runEnumerate(syncEnv(new FakeQueue()), { connect: async () => mailbox });
+
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(warnings).toContain("CONDSTORE");
+    expect((await folderRow())!.highestModSeq).toBeNull();
   });
 });
 
