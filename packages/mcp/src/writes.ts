@@ -213,12 +213,19 @@ export function moveMessage(
  * coordinates are: working it out means reading `messages`, and the sync worker
  * deliberately does not. What crosses the binding is a finished In-Reply-To and
  * a finished References list.
+ *
+ * Joined on the folder's current UIDVALIDITY, exactly as `resolve` is. A reply
+ * is a message-targeted write like the other two, and a stale generation is as
+ * wrong here as it is there: the id would still name a row, but the subject and
+ * threading headers would come from a message that is no longer what the caller
+ * searched for.
  */
 async function replyContext(db: D1Database, messageId: number): Promise<ReplyContext | undefined> {
   const row = await db
     .prepare(
-      `SELECT subject, rfc_message_id AS rfcMessageId, reference_ids AS referenceIds
-       FROM messages WHERE id = ?`,
+      `SELECT m.subject, m.rfc_message_id AS rfcMessageId, m.reference_ids AS referenceIds
+       FROM messages m JOIN folders f ON f.id = m.folder_id
+       WHERE m.id = ? AND (f.uidvalidity IS NULL OR m.uidvalidity = f.uidvalidity)`,
     )
     .bind(messageId)
     .first<{ subject: string; rfcMessageId: string | null; referenceIds: string }>();

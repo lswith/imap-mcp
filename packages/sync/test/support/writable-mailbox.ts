@@ -50,6 +50,11 @@ export type WritableMailboxOptions = {
   appendWithoutUid?: boolean;
   /** Flags the server silently refuses to set, e.g. a read-only folder. */
   ignoreFlags?: string[];
+  /**
+   * Another mail client cleared \Deleted between the read-back and the
+   * expunge, so UID EXPUNGE removes nothing and reports nothing.
+   */
+  deletedClearedBeforeExpunge?: boolean;
 };
 
 const DEFAULT_FOLDERS: FakeFolder[] = [
@@ -171,6 +176,11 @@ export class WritableMailbox implements Mailbox {
     this.writes.push(`expunge ${uid}`);
 
     const folder = this.#current();
+    if (this.#options.deletedClearedBeforeExpunge) {
+      for (const message of folder.messages) {
+        message.flags = message.flags.filter((flag) => flag !== "Deleted");
+      }
+    }
     const message = folder.messages.find((candidate) => candidate.uid === uid);
     // Same rule the real server follows: UID EXPUNGE only removes what is
     // actually marked \Deleted.

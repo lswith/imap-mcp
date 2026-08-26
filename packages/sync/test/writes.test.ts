@@ -210,6 +210,20 @@ describe("move_message", () => {
     expect(await messageCount()).toBe(1);
   });
 
+  it("does not claim a move that expunged nothing", async () => {
+    const id = await seedMessage();
+    // Another mail client cleared \Deleted between the read-back and the
+    // expunge. The copy landed, the original did not go, and deleting the index
+    // row here would make a message that is still in the mailbox unfindable.
+    const box = mailbox({ deletedClearedBeforeExpunge: true });
+
+    const outcome = await moveMessage(env.DB, box, move({ messageId: id }), log());
+
+    expect(outcome).toEqual({ ok: false, reason: expect.stringContaining("still in Archive") });
+    expect(box.writes).toEqual(["copy 12 -> Saved", "setFlags 12 add Deleted", "expunge 12"]);
+    expect(await messageCount()).toBe(1);
+  });
+
   it("refuses Trash by name", async () => {
     const box = mailbox();
 

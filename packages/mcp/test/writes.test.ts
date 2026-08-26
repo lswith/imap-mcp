@@ -315,6 +315,28 @@ describe("create_draft", () => {
     expect(writer.calls[0]?.request).toMatchObject({ references: ["<a@b.invalid>"] });
   });
 
+  it("refuses to reply to a row left behind by a UIDVALIDITY change", async () => {
+    // The same rows flag_message and move_message refuse. A reply built from
+    // one derives its subject and threading headers from a message that is no
+    // longer the one that id names.
+    const id = await seedMessage({
+      folder: "Archive",
+      folderUidValidity: 200,
+      uidValidity: 100,
+      subject: "Quarterly invoice",
+      rfcMessageId: "<abc@example.invalid>",
+    });
+    const writer = new FakeWriter();
+
+    const outcome = await createDraft(envWithWriter(env, writer), access(), {
+      inReplyTo: id,
+      body: "ok",
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(writer.calls).toEqual([]);
+  });
+
   it("refuses to reply to a message that is not in the index", async () => {
     const writer = new FakeWriter();
 

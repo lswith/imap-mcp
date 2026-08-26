@@ -176,7 +176,22 @@ export async function moveMessage(
     );
   }
 
-  await mailbox.expunge(request.uid);
+  // The expunge is confirmed before the index row is dropped, and the order
+  // matters more than it looks. Another mail client can clear \Deleted between
+  // the read-back above and this command, in which case UID EXPUNGE removes
+  // nothing and says so — and deleting the row anyway would make a message that
+  // is still sitting in the source folder unfindable, which is the one outcome
+  // a move must never produce.
+  const expunged = await mailbox.expunge(request.uid);
+  if (expunged.length === 0) {
+    log.warn(`${request.folder}: uid ${request.uid} was not expunged; leaving the index row`);
+    return refuse(
+      `The copy to ${destination.name} succeeded, but uid ${request.uid} is still in ` +
+        `${request.folder}: the server expunged nothing, so something cleared \\Deleted in ` +
+        "between. There are now two copies.",
+    );
+  }
+
   await deleteMessage(db, request.messageId);
 
   return {

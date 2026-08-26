@@ -306,6 +306,12 @@ load-bearing control in the whole design rather than hygiene on top of it:
 And from the write tools (#12), which are the only way anything in this system
 changes a mailbox:
 
+- **Every read of `messages` on the write path joins the folder's current
+  `uidvalidity`.** Both of them: the coordinate lookup and the reply context a
+  draft threads under. Search merely hides rows from a renumbered generation; a
+  write has to refuse them, and a reply built from one derives its subject and
+  threading headers from a message that is no longer what the caller searched
+  for.
 - **Every refusal lives in `packages/sync`, never in `packages/mcp`.** Policy
   belongs with the credential: a check in the sync worker is one there is no
   path around, and a check in the caller is one an injected instruction has to
@@ -319,8 +325,12 @@ changes a mailbox:
 - **A move without a `COPYUID` aborts before the `STORE \Deleted`.** It is the
   one irreversible path in the ticket: without a COPYUID nothing has confirmed
   the copy landed, and the next step marks the original for deletion. The
-  `\Deleted` write is then read back before the expunge for the same reason.
-  Each step gates the next, and the order is the whole safety argument.
+  `\Deleted` write is then read back before the expunge for the same reason,
+  and the expunge itself is confirmed before the index row is dropped — another
+  mail client can clear `\Deleted` in between, and a row deleted after an
+  expunge that removed nothing makes a message still sitting in the source
+  folder unfindable. Each step gates the next, and the order is the whole
+  safety argument.
 - **Audit rows are written by `packages/mcp`, in two statements.** It is the
   only side that knows the actor and the raw arguments, and the only side that
   sees an attempt refused before the mailbox is contacted. The intent is
