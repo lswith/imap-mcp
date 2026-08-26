@@ -90,7 +90,7 @@ What it still has to check is the **audience**: `ctx.access.aud` must match this
 
 Missing configuration fails closed: with `ACCESS_AUD` unset the worker answers `500`, never an unauthenticated `200`.
 
-[`docs/access.md`](./docs/access.md) is the setup guide, and [`scripts/setup-access.sh`](./scripts/setup-access.sh) walks it interactively. A full deploy-from-scratch guide — secrets, bindings, migrations and the backfill — is [#13](https://github.com/lswith/imap-mcp/issues/13); the Access half is written.
+[`docs/access.md`](./docs/access.md) is the setup guide, and [`scripts/setup-access.sh`](./scripts/setup-access.sh) walks it interactively. Note that the MCP worker is not deployed on its own: `imap-mcp-sync` goes first, because it provisions the D1 database both workers share — see [First deploy](#first-deploy). A full deploy-from-scratch guide — secrets, bindings, migrations and the backfill — is [#13](https://github.com/lswith/imap-mcp/issues/13); the Access half is written.
 
 ## Storage
 

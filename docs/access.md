@@ -100,7 +100,24 @@ only ever works from Claude Code.
    Leave `workers_dev` and `preview_urls` at `false`. A `workers.dev` hostname
    is not one your Access application covers.
 
-6. **Deploy:** `pnpm --filter @imap-mcp/mcp run deploy`.
+6. **Deploy — in this order.** Neither `wrangler.jsonc` commits a
+   `database_id`, so whichever worker you deploy first provisions the D1
+   database *both* share, and wrangler writes the id back into that worker's
+   config. Deploying this one first provisions it from the wrong side, and the
+   second deploy then creates a second database. Nothing errors; the MCP server
+   just serves an empty index for ever.
+
+   ```bash
+   pnpm --filter @imap-mcp/sync run deploy   # first — provisions D1. See
+                                             # README.md -> First deploy
+   pnpm run db:migrate:remote                # apply the schema; a no-op if re-run
+   pnpm --filter @imap-mcp/mcp run deploy    # then this one
+   ```
+
+   Afterwards, check that the `database_id` wrangler wrote into
+   `packages/mcp/wrangler.jsonc` matches the one in
+   `packages/sync/wrangler.jsonc`. Both ids are yours — don't push them
+   upstream.
 
 ## Checking it worked
 
