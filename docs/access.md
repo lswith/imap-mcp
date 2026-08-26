@@ -155,25 +155,42 @@ generate the wrangler config they use from `.env` (see
 ```bash
 # 1. Unauthenticated: 401 with a challenge, and NO Location header.
 #    A 302 here means Managed OAuth is still off (step 3).
-curl -sSD- -o /dev/null https://mail-mcp.example.com/mcp
+curl -sSD- -o /dev/null -X POST https://mail-mcp.example.com/mcp
 
-# 2. Discovery resolves.
+# 2. A path the worker itself would 404 — expect 401, not 404.
+#    This is the cheapest proof that Access is attached to the WORKER rather
+#    than to one hostname: it gates every path, including ones the worker does
+#    not serve. A 404 here means you have a hostname destination.
+curl -sS -o /dev/null -w '%{http_code}\n' https://mail-mcp.example.com/
+
+# 3. Discovery resolves. Access serves all three of these itself — its own
+#    document at the cloudflare-access path is what its 401 points at, and it
+#    shadows the worker's RFC 9728 copy, which is why that copy is a backstop
+#    for `wrangler dev` rather than something production depends on.
 curl -sS https://mail-mcp.example.com/.well-known/oauth-authorization-server | jq
 curl -sS https://mail-mcp.example.com/.well-known/oauth-protected-resource | jq
+curl -sS https://mail-mcp.example.com/.well-known/cloudflare-access-protected-resource/mcp | jq
 
-# 3. The workers.dev hostname does not exist.
+# 4. The workers.dev hostname does not exist.
 curl -sS https://imap-mcp-server.<account>.workers.dev/mcp
+
+# 5. Exactly ONE database. Two means the workers were deployed in the wrong
+#    order and the MCP server is reading an empty one — a silent failure.
+pnpm --filter @imap-mcp/sync exec wrangler d1 list
 ```
 
 **The check that actually matters.** Everything above passes identically for a
 worker whose gate never runs, because an unauthenticated request is refused
-either way. What proves the gate works is the *authenticated* path: complete the
-Claude Code login below and confirm a search returns results. If `ctx.access`
-were not reaching the worker, that request would come back `401` rather than
-succeeding — a signed-in user seeing `401` means Access is authenticating at the
-edge but the runtime context is not arriving, which is the one failure mode this
-design has. If you hit it, check that the Access application covers the exact
-hostname the route serves.
+either way — and every one of those responses comes from Access at the edge, not
+from the worker. What proves the worker works is the *authenticated* path:
+complete the Claude Code login below and run a search.
+
+| What happens | Meaning |
+| --- | --- |
+| Tools appear and a search returns a framed result | It works — `ctx.access` reaches the worker |
+| A signed-in request gets `401` | `ctx.access` is not arriving. Access authenticates at the edge but the runtime context does not reach the worker — the one failure mode this design has |
+| A signed-in request gets `500` | `ACCESS_AUD` is not in `.env`, or the worker was not redeployed after it was added |
+| A search returns no results | Not a failure. The mailbox is not backfilled yet — that needs the sync worker's IMAP configuration and some cron ticks. Getting *past the gate* is the signal |
 
 Then the clients:
 

@@ -241,7 +241,10 @@ load-bearing control in the whole design rather than hygiene on top of it:
   Cloudflare calls attaching the Worker the safest way to gate one, and it is
   the reason `workers_dev: false` is now defence in depth rather than the only
   thing holding the line: worker-level Access covers every route, Custom Domain
-  and `workers.dev` URL at once. It also inverts the setup order — you cannot
+  and `workers.dev` URL at once. Confirmed against the deployed instance — a
+  request to `/`, a path this worker answers 404 on, comes back 401 from the
+  edge instead. That is the cheapest way to tell a Worker destination from a
+  hostname one. It also inverts the setup order — you cannot
   attach a Worker that does not exist, so both workers are deployed (routeless,
   and answering 500 without an audience) before the application is created. The
   one constraint it carries: worker-level Access does not support WebSockets.
@@ -273,8 +276,11 @@ load-bearing control in the whole design rather than hygiene on top of it:
   everything.** The MCP authorization spec makes RFC 9728 metadata a MUST, and
   the `resource_metadata` pointer in this worker's own 401 has to lead
   somewhere — otherwise the one case where that 401 fires is the case where its
-  pointer hits the 404. With Access in front, the edge answers first and this
-  copy is never reached; its audience is the backstop and `wrangler dev`.
+  pointer hits the 404. Measured against the deployed instance rather than
+  assumed: Access serves both its own
+  `/.well-known/cloudflare-access-protected-resource` and the standard RFC 9728
+  path, so in production the edge answers first and this copy is never reached.
+  Its audience is the backstop and `wrangler dev`.
 - **`handleRequest` is exported, and the tests call it rather than `SELF`.**
   Not a preference: `SELF` from `cloudflare:test` is a service binding, and
   Cloudflare documents that Access deliberately does not propagate `ctx.access`
