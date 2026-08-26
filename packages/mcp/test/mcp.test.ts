@@ -2,7 +2,6 @@ import { env, SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import manifest from "../package.json";
 import { handleRequest } from "../src/index";
 import { authenticated } from "./support/access";
 import { clearIndex, seedMessage } from "./support/seed";
@@ -237,16 +236,6 @@ describe("mcp server", () => {
     const nonce = /<mailbox-message nonce="([0-9a-f]+)">/.exec(text)?.[1];
     expect(nonce).toBeDefined();
     expect(text.split(`</mailbox-message nonce="${nonce}">`)).toHaveLength(2);
-  });
-
-  it("declares no IMAP client, so no tool here can open a connection", async () => {
-    const { dependencies, devDependencies } = manifest as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-
-    expect(Object.keys({ ...dependencies, ...devDependencies })).not.toContain("cf-imap");
-    expect(Object.keys({ ...dependencies, ...devDependencies })).not.toContain("@imap-mcp/imap");
   });
 
   it("serves the MCP endpoint and nothing else", async () => {

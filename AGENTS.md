@@ -27,6 +27,12 @@ worker. Do not give `packages/mcp` an IMAP connection, and do not add
 `@imap-mcp/imap` to its dependencies — `packages/sync` is the only package that
 may depend on it.
 
+That is a lint rule rather than a rule you have to remember:
+`style/noRestrictedImports`, scoped to `packages/mcp/**` in `biome.json`,
+refuses `@imap-mcp/imap`, `cf-imap` and `cloudflare:sockets` with the reason
+attached. It catches type-only imports too, and it fires on the offending line
+rather than on a manifest — which is why it is a lint and not a test.
+
 ## Build & Test
 
 ```bash
