@@ -411,6 +411,17 @@ describe("renderThread", () => {
     expect(renderThread(threadOf([preview()]))).not.toMatch(/older/i);
   });
 
+  it("does not claim both that nothing was missed and that something was", () => {
+    // basis "alone" with truncation is a real state: the prefilter ran out of
+    // room and nothing that survived it matched. Saying "nothing else belongs"
+    // and "older messages are not shown" in the same breath tells the reader
+    // two incompatible things and invites it to believe the confident one.
+    const rendered = renderThread(threadOf([preview()], "alone", true));
+
+    expect(rendered).not.toMatch(/nothing else in the index appears to belong/i);
+    expect(rendered).toMatch(/limit|ran out of room|may be missing|incomplete/i);
+  });
+
   it("answers plainly when nothing else belongs to the conversation", () => {
     const rendered = renderThread(threadOf([preview()], "alone"));
 

@@ -299,10 +299,22 @@ function bodyRegion(message: MessageRecord, body: string): string {
   return message.body === null ? "(this message was indexed with no body)" : body;
 }
 
-/** What the caller is told about how these messages came to be listed together. */
+/**
+ * What the caller is told about how these messages came to be listed together.
+ *
+ * "Nothing else belongs" is a claim, and it is only available when the search
+ * that would have found something else actually finished. Cut short, the honest
+ * answer is that nothing matched *and* the looking was incomplete — saying both
+ * of the confident sentences instead would tell the reader two incompatible
+ * things and invite it to believe the reassuring one.
+ */
 function basisNote(thread: Extract<ThreadOutcome, { ok: true }>): string {
   if (thread.basis === "alone") {
-    return "Nothing else in the index appears to belong to this conversation.";
+    return thread.truncated
+      ? "Nothing else that was looked at belongs to this conversation, but the search for " +
+          "candidates hit its limit before it finished, so there may be more that was never " +
+          "examined."
+      : "Nothing else in the index appears to belong to this conversation.";
   }
   if (thread.basis === "subject") {
     return (
@@ -337,7 +349,9 @@ export function renderThread(thread: Extract<ThreadOutcome, { ok: true }>): stri
   const rows = thread.messages.map((message) => threadLine(message, thread.seedId)).join("\n");
   const id = nonceFor(rows);
   const notes = [basisNote(thread)];
-  if (thread.truncated) {
+  // Not repeated when the basis note already carried it: "alone" and truncated
+  // is one fact about an unfinished search, not two facts about a conversation.
+  if (thread.truncated && thread.basis !== "alone") {
     notes.push(
       `The ${thread.messages.length} most recent messages are shown; older messages in this ` +
         "conversation are not.",

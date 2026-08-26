@@ -322,10 +322,13 @@ model is decided:
   fill the limit and the genuine reply would never be judged. Too strict drops
   members outright: a prefilter that cared about spacing threw away
   "Re:  Report   from operations", which normalisation plainly makes the same
-  subject. So the test is **anchored at the end and blind to whitespace** —
-  everything normalisation strips is a *prefix*, which makes the normalised
-  subject a suffix of the raw one, and whitespace is removed from both sides
-  because SQLite has no regex to collapse it with. "Whitespace" there means
+  subject. So the test is **anchored at the end against a colon, and blind to
+  whitespace** — everything normalisation strips is a *prefix* ending in a
+  colon, so an exact match's key is either the needle itself or a colon
+  followed by it, and whitespace is removed from both sides because SQLite has
+  no regex to collapse it with. Anchoring at the end alone was not enough:
+  "Weekly report from operations" ends with the same key, and enough subjects
+  like it starve the genuine reply exactly as an unanchored test did. "Whitespace" there means
   every character JavaScript's `\s` matches — twenty-five of them, including
   the non-breaking space and the en and em spaces, not the four obvious ASCII
   ones — because that is what `normaliseSubject` collapses. Both halves are
@@ -336,7 +339,11 @@ model is decided:
   candidate limit is deliberately larger than the result cap — the two answer
   different questions, one bounding what reaches a model and the other what the
   exact check may look at — and when the prefilter is what ran out of room, the
-  answer reports it.
+  answer reports it. Reporting it is also why "nothing else belongs to this
+  conversation" is not said when the candidate search was cut short: that
+  sentence is a claim, available only when the looking actually finished, and
+  pairing it with a truncation note would tell a reader two incompatible things
+  and invite it to believe the reassuring one.
 - **The one subject difference the prefilter cannot see is non-ASCII case**,
   because SQLite's `lower()` is ASCII-only and workerd exposes no Unicode-aware
   fold. It can only cause a miss, never a false include. Pinned by a test rather

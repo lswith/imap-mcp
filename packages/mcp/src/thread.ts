@@ -183,12 +183,15 @@ const HEADER_PASS = `
  * be judged at all: the conversation would come back missing members, or with
  * the seed reported as alone.
  *
- * So the test is **anchored at the end**. Everything normalisation removes —
- * `Re:`, `Fwd:`, `Re[2]:` — is a prefix, which makes the normalised subject a
- * suffix of the raw one; comparing the tail keeps every reply form and drops
- * the whole class of subjects that merely carry the seed's as a prefix. It is
- * still `=` against a `substr`, never `LIKE`, so there is no pattern language
- * for a subject to smuggle a wildcard through: `_` is common in real subjects.
+ * So the test is **anchored at the end, against a colon**. Everything
+ * normalisation removes — `Re:`, `Fwd:`, `Re[2]:` — is a prefix, and every one
+ * of them ends in a colon, so an exact match's key is either the needle itself
+ * or a colon followed by it. Anchoring only at the end was not enough: "Weekly
+ * report from operations" ends with "reportfromoperations" too, and enough
+ * subjects like it fill the candidate limit and starve the genuine reply just
+ * as the unanchored test did. It is still `=` against a `substr`, never `LIKE`,
+ * so there is no pattern language for a subject to smuggle a wildcard through:
+ * `_` is common in real subjects.
  *
  * Whitespace is then removed from both sides rather than collapsed, because
  * normalisation collapses it and the prefilter has to agree with the check that
@@ -248,7 +251,15 @@ const SUBJECT_PASS = `
   JOIN folders f ON f.id = m.folder_id
   WHERE ${GENERATION_GUARD}
     AND m.internal_date BETWEEN ?1 AND ?2
-    AND substr(${SUBJECT_KEY}, -length(?3)) = ?3
+    -- Ending with the seed's key is not enough: "Weekly report from operations"
+    -- ends with "reportfromoperations" and is a different subject. What makes
+    -- the difference is what sits in front. Everything normalisation strips is
+    -- a reply prefix, and every reply prefix ends in a colon — so an exact
+    -- match's key is either the needle itself or a colon followed by it.
+    -- Without this, enough such decoys fill the candidate limit and the genuine
+    -- older reply is discarded before the exact check ever sees it.
+    AND ( ${SUBJECT_KEY} = ?3
+       OR substr(${SUBJECT_KEY}, -(length(?3) + 1)) = ':' || ?3 )
   ORDER BY m.internal_date DESC, m.id DESC
   LIMIT ?4`;
 

@@ -405,6 +405,29 @@ describe("getThread", () => {
       expect((await thread(first)).basis).toBe("alone");
     });
 
+    it("is not starved by subjects that end with the seed's but are not it", async () => {
+      // A decoy only has to *end* with the key to pass the prefilter, and
+      // "Weekly report from operations" does. Enough of them fill the candidate
+      // limit and the genuine older reply is discarded before the exact check
+      // ever sees it — the same starvation as before, through a narrower door.
+      const at = Date.parse("2026-03-10T09:00:00Z");
+      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
+      const reply = await seedMessage({
+        subject: "Re: Report from operations",
+        internalDate: at - 60_000,
+      });
+      for (let n = 0; n < SUBJECT_CANDIDATES; n++) {
+        await seedMessage({
+          subject: `Weekly ${n} report from operations`,
+          internalDate: at + (n + 1) * 60_000,
+        });
+      }
+
+      const found = await thread(first);
+
+      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
+    });
+
     it("says so when the prefilter itself ran out of room", async () => {
       // Distinct from the result cap being reached: rows were dropped before
       // anything judged them, so members may be missing that would have been
