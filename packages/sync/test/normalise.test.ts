@@ -216,6 +216,30 @@ describe("toMessageRow", () => {
       flags: '["Seen"]',
       bodyText: "the body",
       hasAttachments: 1,
+      oversize: 0,
+    });
+  });
+
+  it("leaves the body and attachment columns empty for an oversize message", async () => {
+    // A message too large to fetch is recorded from its headers alone (#9).
+    // Anything the caller happens to be holding — a body truncated mid-MIME by
+    // byteLimit, say — is deliberately not written, because it is not the
+    // message.
+    const message = fakeMessage(7, {
+      size: 40 * 1024 * 1024,
+      text: "half of a truncated body",
+      attachments: [fakeAttachment()],
+    });
+
+    const row = await toMessageRow(message, 3, 100, { oversize: true });
+
+    expect(row).toMatchObject({
+      uid: 7,
+      subject: "Message 7",
+      sizeBytes: 40 * 1024 * 1024,
+      bodyText: null,
+      hasAttachments: 0,
+      oversize: 1,
     });
   });
 

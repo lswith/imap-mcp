@@ -28,7 +28,9 @@ import type { MailboxMessage } from "@imap-mcp/imap";
  */
 export const MAX_BODY_CHARS = 256 * 1024;
 
-const TRUNCATION_MARKER = "\n[truncated by imap-mcp]";
+/** Shared with attachments.ts, so a truncated body and a truncated
+ *  attachment read the same way. */
+export const TRUNCATION_MARKER = "\n[truncated by imap-mcp]";
 
 /** The row shape store.ts binds. Field order matches the INSERT. */
 export type MessageRow = {
@@ -53,6 +55,12 @@ export type MessageRow = {
   bodyText: string | null;
   /** 0 or 1 — SQLite has no boolean. */
   hasAttachments: number;
+  /**
+   * The message was too large to fetch, so this row was written from its
+   * headers alone: no body, no attachments, and no In-Reply-To or References
+   * either — a header-only FETCH does not ask for them. 0 or 1.
+   */
+  oversize: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -313,7 +321,7 @@ function collapseHtmlWhitespace(text: string): string {
 }
 
 /** The final pass on any body: no trailing spaces, no runs of blank lines. */
-function tidyLines(text: string): string {
+export function tidyLines(text: string): string {
   return text
     .replace(/\r\n?/g, "\n")
     .split("\n")
@@ -366,11 +374,19 @@ export function parseSentDate(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * @param options.oversize The message exceeded the fetch budget, so only its
+ * headers were read. The body and attachment columns are then left empty rather
+ * than filled from a message that was never fetched — or, worse, from one whose
+ * MIME was truncated mid-part.
+ */
 export async function toMessageRow(
   message: MailboxMessage,
   folderId: number,
   uidValidity: number,
+  options: { oversize?: boolean } = {},
 ): Promise<MessageRow> {
+  const oversize = options.oversize === true;
   const references = (message.headers.references ?? "")
     .split(/\s+/)
     .filter((id) => id.startsWith("<"));
@@ -393,8 +409,9 @@ export async function toMessageRow(
     sentDate: parseSentDate(message.headers.date),
     sizeBytes: Number.isFinite(message.size) ? message.size : null,
     flags: JSON.stringify(message.flags),
-    bodyText: await normaliseBody(message),
-    hasAttachments: message.attachments.length > 0 ? 1 : 0,
+    bodyText: oversize ? null : await normaliseBody(message),
+    hasAttachments: !oversize && message.attachments.length > 0 ? 1 : 0,
+    oversize: oversize ? 1 : 0,
   };
 }
 

@@ -142,7 +142,14 @@ export class FakeMailbox implements Mailbox {
   async fetchMessages(options: FetchOptions): Promise<MailboxMessage[]> {
     this.fetches.push(options);
     const wanted = new Set(uidsOf(options.uids));
-    return this.#current().messages.filter((message) => wanted.has(message.uid));
+    const matches = this.#current().messages.filter((message) => wanted.has(message.uid));
+    // `includeBody: false` is a genuinely different FETCH — cf-imap asks for
+    // seven header fields and RFC822.SIZE and nothing else — and the consumer
+    // uses it to learn sizes before it pulls any bytes (#9). A fake that handed
+    // back full bodies anyway would let a bug that fetched everything twice
+    // pass.
+    if (options.includeBody === false) return matches.map(headersOnly);
+    return matches;
   }
 
   async setFlags(): Promise<never> {
@@ -175,6 +182,19 @@ export class FakeMailbox implements Mailbox {
     if (!this.#selected) throw new Error("No folder is selected");
     return this.#selected;
   }
+}
+
+/**
+ * What a header-only fetch can answer.
+ *
+ * The header set is cf-imap's: SUBJECT FROM TO CC MESSAGE-ID CONTENT-TYPE DATE.
+ * In-Reply-To and References are deliberately not among them, which is why an
+ * oversize message's row carries neither.
+ */
+function headersOnly(message: MailboxMessage): MailboxMessage {
+  const headers: Record<string, string> = {};
+  if (message.headers.date !== undefined) headers.date = message.headers.date;
+  return { ...message, headers, text: undefined, html: undefined, raw: "", attachments: [] };
 }
 
 function highestUid(folder: Folder): number {
@@ -230,4 +250,21 @@ export function fakeAttachment(overrides: Partial<MailboxAttachment> = {}): Mail
     isInline: false,
     ...overrides,
   };
+}
+
+/** An attachment carrying `bytes`, with `size` and `contentBase64` agreeing. */
+export function attachmentOf(
+  bytes: Uint8Array,
+  overrides: Partial<MailboxAttachment> = {},
+): MailboxAttachment {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return fakeAttachment({ size: bytes.length, contentBase64: btoa(binary), ...overrides });
+}
+
+/** `length` bytes of deterministic, non-text content — a stand-in for a PDF. */
+export function bytesOfLength(length: number): Uint8Array {
+  const bytes = new Uint8Array(length);
+  for (let index = 0; index < length; index++) bytes[index] = index % 256;
+  return bytes;
 }

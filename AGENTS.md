@@ -80,11 +80,12 @@ pnpm run deploy      # wrangler deploy
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
 (`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6), incremental
-sync (#8), the MCP server (`packages/mcp`, #7) and the Access gate
-(`packages/mcp/src/access.ts`, #10) are implemented and tested. The rest is
-tracked as issues on this repo: #9 attachments, #11 `get_message` and
-`get_thread`, #12 write tools, #24 flag reconciliation. See the roadmap table
-in README.md for the full list, and docs/access.md for the Access setup.
+sync (#8), attachments (`packages/sync/src/attachments.ts`, #9), the MCP server
+(`packages/mcp`, #7) and the Access gate (`packages/mcp/src/access.ts`, #10) are
+implemented and tested. The rest is tracked as issues on this repo: #11
+`get_message` and `get_thread`, #12 write tools, #24 flag reconciliation, #31
+`.docx` text extraction. See the roadmap table in README.md for the full list,
+and docs/access.md for the Access setup.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -102,8 +103,9 @@ trip over if they are not known:
 - **Timestamps are INTEGER epoch milliseconds** everywhere.
 - `messages_fts` is **external content plus triggers**. Writes to `messages`
   reindex themselves; a flags-only `UPDATE` deliberately does not. Adding an
-  FTS column or changing the tokenizer needs a full reindex, so #9 gets its own
-  FTS table over `attachments.extracted_text` rather than a column here.
+  FTS column or changing the tokenizer needs a full reindex, which is why #9
+  added `attachments_fts` (`migrations/0002_attachments.sql`) as its own table
+  over `attachments.extracted_text` rather than a column here.
 - **There is no `wrangler d1 export`** for this database — it refuses to run
   against FTS5 — so re-running the backfill is the recovery path.
 - No `database_id` is committed; the binding is provisioned on first deploy.
@@ -183,6 +185,51 @@ And from the sync worker (`packages/sync`, #5 and #6), for the same reason:
   only on the `selectFolder` failure path, and a `LIST` that itself fails
   answers "still there" — a range must never be dropped on the strength of a
   question that went unanswered.
+
+And from attachments (`packages/sync/src/attachments.ts`, #9):
+
+- **The R2 key is derived, never generated**:
+  `att/<folder_id>/<uidvalidity>/<uid>/<part_index>`. That is the whole of what
+  makes a re-sync overwrite rather than duplicate, and `uidvalidity` is in it
+  because a renumbered folder holds different messages under the same uids.
+- **Bytes go to R2 *before* the message row goes to D1**, and a failed put means
+  no row at all. Gap detection counts `messages` rows, so a row that landed
+  while its bytes did not would mark the uid bucket complete and the range would
+  never be enqueued again. Reversing this order is silent data loss, not a
+  refactor. It is also why the R2 writes are **not** `waitUntil`-ed, despite
+  what the old comment in `src/index.ts` anticipated.
+- **A message and its attachment rows go in one `db.batch()`**, with
+  `attachments.message_id` resolved by a subselect on
+  `(folder_id, uidvalidity, uid)` rather than by an id read back. One implicit
+  transaction, so a message row can never claim attachments whose rows did not
+  land. The rows are `DELETE`d and reinserted rather than upserted, so a part
+  that is no longer there leaves no row behind.
+- **Whether a message can be fetched is decided before any bytes move.** One
+  header-only `FETCH` per range answers `RFC822.SIZE` for every uid; anything
+  over `SYNC_MAX_FETCH_BYTES` is recorded from those headers with
+  `messages.oversize` set and never body-fetched. `byteLimit` alone would not do
+  — it is `BODY.PEEK[]<0.N>`, a partial fetch that truncates rather than
+  refusing, so relying on it means parsing damaged MIME and hoping to notice. It
+  is still sent, as a second line of defence against a low `RFC822.SIZE`.
+- **An oversize message still gets a row.** Skipping it would leave its uid
+  bucket permanently short and re-queue the range on every tick for good. The
+  row has no body, no attachments, and no `in_reply_to` or `reference_ids` — a
+  header-only fetch does not ask for those.
+- **Slices are bounded by bytes as well as by count.** `SYNC_CHUNK_SIZE` is the
+  count; `SYNC_MAX_FETCH_BYTES` is the bytes, and the same value is the
+  per-message ceiling so the two cannot disagree.
+- **An attachment that fails to decode is never a failed message.** Its row is
+  written with a null `r2_key` and warned about. Extraction is total by
+  construction (every decode path has a fallback that cannot throw); an
+  extractor that *can* fail — a zip reader, a PDF parser — must swallow its own
+  failures and answer null.
+- **Text is extracted for `.txt`, `.md` and `.csv` only.** The extension wins
+  when there is one, and an unrecognised extension is a "no" rather than a
+  reason to consult the MIME type — `notes.txt.pdf` is a PDF. PDF and `.docx`
+  are stored and retrievable but not indexed; `.docx` is #31.
+- **R2 objects carry no `httpMetadata`.** `filename` and `mimeType` are written
+  by whoever sent the message, and an object with an author-chosen content type
+  is a loaded gun for whoever later serves these bytes over HTTP. D1 holds both.
 
 And from the MCP server (`packages/mcp`, #7), which is where anything reaching a
 model is decided:

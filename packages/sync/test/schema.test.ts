@@ -245,12 +245,109 @@ describe("full-text search", () => {
   });
 });
 
+describe("the attachment index", () => {
+  // Its own FTS5 table rather than a column on messages_fts (#9): FTS5 cannot
+  // gain a column in place, so folding attachment text in would mean rebuilding
+  // the whole index — which here means re-running the backfill.
+
+  async function addAttachment(
+    messageId: number,
+    filename: string,
+    text: string | null,
+  ): Promise<number> {
+    const row = await env.DB.prepare(
+      `INSERT INTO attachments (message_id, part_index, filename, mime_type, r2_key, extracted_text)
+       VALUES (?, 0, ?, 'text/plain', 'att/1/100/1/0', ?) RETURNING id`,
+    )
+      .bind(messageId, filename, text)
+      .first<{ id: number }>();
+    return row!.id;
+  }
+
+  /** Attachment ids matching an FTS query. */
+  async function searchAttachments(query: string): Promise<number[]> {
+    const { results } = await env.DB.prepare(
+      "SELECT rowid AS id FROM attachments_fts WHERE attachments_fts MATCH ?",
+    )
+      .bind(query)
+      .all<{ id: number }>();
+    return results.map((row) => row.id);
+  }
+
+  it("indexes the extracted text and the filename on insert", async () => {
+    const messageId = await upsert(1, "Subject", "body");
+    const id = await addAttachment(messageId, "quarterly-report.txt", "the aardvark manifest");
+
+    expect(await searchAttachments("aardvark")).toEqual([id]);
+    // The filename matters on its own: a PDF is stored but never extracted, so
+    // its name is the only thing there is to match.
+    expect(await searchAttachments("quarterly")).toEqual([id]);
+  });
+
+  it("stems and folds diacritics the same way messages_fts does", async () => {
+    const messageId = await upsert(1, "Subject", "body");
+    const id = await addAttachment(messageId, "notes.txt", "meetings at the café");
+
+    expect(await searchAttachments("meeting")).toEqual([id]);
+    expect(await searchAttachments("cafe")).toEqual([id]);
+  });
+
+  it("keeps up when a row is replaced or deleted", async () => {
+    const messageId = await upsert(1, "Subject", "body");
+    const id = await addAttachment(messageId, "notes.txt", "aardvark");
+
+    await env.DB.prepare("UPDATE attachments SET extracted_text = 'buffalo' WHERE id = ?")
+      .bind(id)
+      .run();
+    expect(await searchAttachments("aardvark")).toEqual([]);
+    expect(await searchAttachments("buffalo")).toEqual([id]);
+
+    await env.DB.prepare("DELETE FROM attachments WHERE id = ?").bind(id).run();
+    expect(await searchAttachments("buffalo")).toEqual([]);
+  });
+
+  it("does not reindex a write that touches only the R2 key", async () => {
+    const messageId = await upsert(1, "Subject", "body");
+    const id = await addAttachment(messageId, "notes.txt", "aardvark");
+
+    await env.DB.prepare("UPDATE attachments SET r2_key = 'att/9/9/9/9' WHERE id = ?")
+      .bind(id)
+      .run();
+
+    expect(await searchAttachments("aardvark")).toEqual([id]);
+  });
+
+  it("indexes an attachment with no extracted text by its filename alone", async () => {
+    const messageId = await upsert(1, "Subject", "body");
+    const id = await addAttachment(messageId, "invoice-2024.pdf", null);
+
+    expect(await searchAttachments("invoice")).toEqual([id]);
+  });
+});
+
+describe("oversize messages", () => {
+  it("defaults to not oversize, and does not reindex the body when it is set", async () => {
+    // A message too large to fetch still gets a row, so its uid bucket is not
+    // permanently short (#9). The column is unrelated to the FTS index, which
+    // is external content over (subject, body_text) alone.
+    const id = await upsert(1, "Subject", "aardvark");
+    const before = await env.DB.prepare("SELECT oversize FROM messages WHERE id = ?")
+      .bind(id)
+      .first<{ oversize: number }>();
+    expect(before!.oversize).toBe(0);
+
+    await env.DB.prepare("UPDATE messages SET oversize = 1 WHERE id = ?").bind(id).run();
+
+    expect(await search("aardvark")).toEqual([id]);
+  });
+});
+
 describe("referential integrity", () => {
-  it("cascades a folder delete through messages, attachments and the index", async () => {
+  it("cascades a folder delete through messages, attachments and both indexes", async () => {
     const id = await upsert(1, "Subject", "aardvark");
     await env.DB.prepare(
-      `INSERT INTO attachments (message_id, part_index, filename, mime_type, r2_key)
-       VALUES (?, 0, 'notes.txt', 'text/plain', 'msg/1/0')`,
+      `INSERT INTO attachments (message_id, part_index, filename, mime_type, r2_key, extracted_text)
+       VALUES (?, 0, 'notes.txt', 'text/plain', 'msg/1/0', 'buffalo')`,
     )
       .bind(id)
       .run();
@@ -260,6 +357,10 @@ describe("referential integrity", () => {
     expect(await count("messages")).toBe(0);
     expect(await count("attachments")).toBe(0);
     expect(await search("aardvark")).toEqual([]);
+    const orphans = await env.DB.prepare(
+      "SELECT count(*) AS n FROM attachments_fts WHERE attachments_fts MATCH 'buffalo'",
+    ).first<{ n: number }>();
+    expect(orphans!.n).toBe(0);
   });
 
   it("rejects a second attachment row for the same part of a message", async () => {
