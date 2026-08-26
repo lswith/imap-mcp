@@ -219,58 +219,53 @@ model is decided:
 And from the Access gate (`packages/mcp/src/access.ts`, #10), which is the
 load-bearing control in the whole design rather than hygiene on top of it:
 
-- **The token the client holds and the token the worker checks are different
-  things.** Managed OAuth issues the *client* an opaque token (`oauth:...`) that
-  only Access can verify; Access exchanges it at the edge and forwards a signed
-  JWT in `Cf-Access-Jwt-Assertion`. So the gate reads that header, never
-  `Authorization`. Anyone "fixing" it to read the bearer token would be trusting
-  a string this worker cannot read.
-- **`aud` is pinned, and that is the half that does the work.** Every
-  application in one Zero Trust account is signed by the same team keys, so a
-  signature-and-issuer check admits users of any of them — including an
-  application whose policy lets the whole internet in. `algorithms: ["RS256"]`
-  and `requiredClaims: ["exp"]` are pinned for the same reason and are not
-  belt-and-braces: a test proves that without them an HS256 token signed with a
-  guessed secret, and a token carrying no expiry at all, both verify.
-- **Verified here rather than trusted from the edge**, which is what makes the
-  gate survive a mistake in front of it — a route added before the Access
-  application exists, a policy edited to bypass, an origin reachable by some
-  path that did not traverse Access. The native `ctx.access` API is deliberately
-  not used: it is edge-provided identity, which is the thing this ticket set out
-  not to rely on, and it postdates the compat date the vitest pool's workerd
-  caps at.
+- **The gate reads `ctx.access`, never a header.** Access Managed OAuth issues
+  the *client* an opaque token (`oauth:...`) only Access can verify, exchanges
+  it at the edge, and hands the worker the result as `ctx.access`. It also still
+  forwards a signed JWT in `Cf-Access-Jwt-Assertion`, and verifying that instead
+  would be the weaker choice, not merely the older one: a header is request
+  data, trustworthy only while nothing can reach this worker without traversing
+  Access. `ctx.access` is set by the runtime, cannot be spoofed by a caller, and
+  is absent exactly when Access did not run — so the gate fails closed by
+  construction rather than by remembering to.
+- **`aud` is still checked, and that is the whole of the security decision.**
+  Access authenticating *someone* is not the claim that matters; one Zero Trust
+  account holds many applications and another one's policy may be far more
+  generous than this one's. A test proves it: stub the comparison out and a
+  caller authenticated for `another-application` walks in.
 - **Absent configuration is a 500, never a pass and never a 401.** A 401 would
   invite a client into an OAuth flow that cannot succeed; a 403 would claim a
   correct credential was rejected and send the deployer to edit the wrong thing.
   What must never happen is the third option. `readAccessConfig` returns an
   outcome rather than throwing, matching `SearchOutcome` in `src/search.ts`, so
   the failure cannot be walked past by forgetting a `catch`.
-- **An unreachable JWKS answers 503, not 401.** Reporting it as `invalid_token`
-  tells a client its perfectly good session was revoked, sending it back through
-  OAuth for a token that fails identically — a browser window at the user for
-  what is usually a blip. The jose errors that judge the *token* are enumerated
-  explicitly, because the interesting ones are not subclasses: a certs endpoint
-  answering 404 throws the *base* `JOSEError`, so "is it a JOSEError" would call
-  an outage the caller's fault. Anything unrecognised falls to 503 deliberately.
+- **The refusal is a `401` with a `WWW-Authenticate` challenge, never a
+  redirect.** That is what makes an MCP client run the OAuth flow instead of
+  rendering a login page it cannot complete, and it is why Managed OAuth has to
+  be switched on — default Access answers a non-browser client with a `302`.
+  The challenge is built by the SDK's `bearerAuthChallengeResponse`, so the
+  header is the spec's rather than this repo's guess at it.
 - **The order in `fetch` is discovery → 404 → Origin → Access, and the Origin
   step is not swappable.** A DNS-rebound browser request carries the victim's
-  Access cookie, so the edge attaches a genuine assertion and the Access check
-  *passes*. Origin is the only thing that stops it, so it must not be reachable
-  past by holding a valid session.
+  Access cookie, so Access genuinely authenticates it and the gate *passes*.
+  Origin is the only thing that stops it, so being signed in must never be a way
+  past it.
 - **`/.well-known/oauth-protected-resource` is served unauthenticated, ahead of
   everything.** The MCP authorization spec makes RFC 9728 metadata a MUST, and
   the `resource_metadata` pointer in this worker's own 401 has to lead
   somewhere — otherwise the one case where that 401 fires is the case where its
   pointer hits the 404. With Access in front, the edge answers first and this
   copy is never reached; its audience is the backstop and `wrangler dev`.
-- **The JWKS set is cached at module scope keyed by team domain, unlike the
-  handler, which is built per request.** The handler closes over `env`; a key
-  set closes over a URL, so keying the map by that URL makes the closure hazard
-  structurally impossible. jose's cache and cooldown live *inside* the object
-  `createRemoteJWKSet` returns, so rebuilding it per request means a certs
-  subrequest on every single tool call.
-- **`wrangler dev` answers 401 to everything, and that is correct.** Nothing
-  attaches the assertion header locally. The tests mint real RS256 assertions
-  against a throwaway tenant generated per run in `vitest.config.ts` and served
-  back through `outboundService`, so no key is committed and a passing test
-  proves a real signature was verified — not that a check was stubbed out.
+- **`handleRequest` is exported, and the tests call it rather than `SELF`.**
+  Not a preference: `SELF` from `cloudflare:test` is a service binding, and
+  Cloudflare documents that Access deliberately does not propagate `ctx.access`
+  across one, so no request made through `SELF.fetch` can ever arrive
+  authenticated. `SELF` still covers the unauthenticated path, which is what it
+  can honestly prove. The cost is real and worth stating: whether Cloudflare
+  populates `ctx.access` for this deployment is the one step no test can
+  exercise, so the authenticated post-deploy check in docs/access.md is not
+  optional.
+- **`wrangler dev` answers 401 to everything, and that is correct.** Access is
+  not in front of a local worker, so `ctx.access` is undefined. An `access.dev`
+  block in an uncommitted copy of `wrangler.jsonc` simulates a signed-in user;
+  see `packages/mcp/.dev.vars.example`.

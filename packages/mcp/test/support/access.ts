@@ -1,71 +1,33 @@
 /**
- * Assertions from the throwaway Zero Trust tenant vitest.config.ts mints.
+ * An execution context as Cloudflare Access would hand one over.
  *
- * The signatures are real: the key pair is generated per run in Node, handed to
- * the test worker as a binding, and the matching public JWKS is what
- * `outboundService` answers the worker's certs fetch with. So a test that gets
- * past the gate got past it by presenting a valid RS256 signature over the
- * right issuer and audience, not by stubbing the check.
+ * Fabricated rather than produced by the runtime, and that is forced rather
+ * than chosen: `SELF` from `cloudflare:test` is a service binding, and Access
+ * deliberately does not propagate `ctx.access` across one, so no request made
+ * through `SELF.fetch` can ever arrive authenticated. The tests therefore drive
+ * `handleRequest` directly (see src/index.ts) with the context shape the
+ * runtime documents.
  *
- * `outsiderToken` signs with a key the tenant never published, which is how
- * "well formed, signed by somebody else" is exercised without hand-editing
- * bytes of a signature.
+ * What that buys and what it costs is worth being honest about: every branch of
+ * the gate is exercised, but the step where Cloudflare decides to populate
+ * `ctx.access` at all is Cloudflare's, and only a deploy can prove it. The
+ * post-deploy checks in docs/access.md are that proof.
  */
 
-import { env } from "cloudflare:test";
-import { generateKeyPair, importJWK, type JWK, SignJWT } from "jose";
-
-/** Matches vitest.config.ts. A domain that deliberately cannot resolve. */
-export const TEAM_DOMAIN = "https://imap-mcp-test.cloudflareaccess.com";
+/** Matches the ACCESS_AUD in vitest.config.ts. */
 export const AUD = "0d3ad0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d";
-export const ASSERTION_HEADER = "cf-access-jwt-assertion";
 
-/** Every claim has a working default; override one to break exactly one thing. */
-export type Claims = {
-  aud?: string;
-  issuer?: string;
-  /** `null` omits the claim entirely, as a service-token identity would. */
-  email?: string | null;
-  subject?: string;
-  /**
-   * Anything `jose` accepts, including a negative age like "-5m" for expired.
-   * `null` omits `exp` altogether — a token that would otherwise never age out.
-   */
-  expiresIn?: string | null;
-  /** Sign with something other than RS256, to prove the algorithm is pinned. */
-  alg?: string;
-};
-
-function mint(key: CryptoKey | Uint8Array, claims: Claims): Promise<string> {
-  const email = claims.email === null ? {} : { email: claims.email ?? "luke@example.com" };
-  const jwt = new SignJWT(email)
-    .setProtectedHeader({ alg: claims.alg ?? "RS256", kid: "test" })
-    .setIssuer(claims.issuer ?? TEAM_DOMAIN)
-    .setAudience(claims.aud ?? AUD)
-    .setSubject(claims.subject ?? "test-subject")
-    .setIssuedAt();
-  if (claims.expiresIn !== null) jwt.setExpirationTime(claims.expiresIn ?? "1h");
-  return jwt.sign(key);
+/** A context for a request Access authenticated for this application. */
+export function authenticated(overrides: { aud?: string; email?: string } = {}) {
+  return {
+    access: {
+      aud: overrides.aud ?? AUD,
+      getIdentity: async () => ({ email: overrides.email ?? "luke@example.com" }),
+    } as unknown as CloudflareAccessContext,
+  };
 }
 
-/** A token signed with a symmetric secret — the classic alg-confusion probe. */
-export function hmacToken(claims: Claims = {}): Promise<string> {
-  return mint(new Uint8Array(32), { ...claims, alg: "HS256" });
-}
-
-/** An assertion the tenant would have issued. */
-export async function accessToken(claims: Claims = {}): Promise<string> {
-  const key = await importJWK(JSON.parse(env.TEST_ACCESS_KEY) as JWK, "RS256");
-  return mint(key as CryptoKey, claims);
-}
-
-/** The same assertion, signed by a key the tenant never published. */
-export async function outsiderToken(claims: Claims = {}): Promise<string> {
-  const { privateKey } = await generateKeyPair("RS256", { extractable: true });
-  return mint(privateKey, claims);
-}
-
-/** The header a request carries once Access has authenticated it. */
-export async function accessHeaders(claims: Claims = {}): Promise<Record<string, string>> {
-  return { [ASSERTION_HEADER]: await accessToken(claims) };
+/** A context for a request that never went through Access. */
+export function unauthenticated() {
+  return { access: undefined };
 }

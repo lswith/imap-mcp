@@ -63,7 +63,7 @@ Everything you would need to supply is named and explained in [`.env.example`](.
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | your environment; wrangler reads it directly |
 | Route / zone for the MCP worker | a `routes` entry you add to `packages/mcp/wrangler.jsonc` |
-| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | `vars` in `packages/mcp/wrangler.jsonc`; **both required** — the worker answers `500` without them |
+| `ACCESS_AUD` | a `vars` entry in `packages/mcp/wrangler.jsonc`; **required** — the worker answers `500` without it |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in `packages/sync/wrangler.jsonc` |
 | `SYNC_FOLDERS` and the four sizing vars | `vars` in `packages/sync/wrangler.jsonc`; all optional |
 | `IMAP_PASSWORD` | `wrangler secret put`, sync worker only — never a `vars` entry |
@@ -78,13 +78,17 @@ Locally, secrets go in a gitignored `.dev.vars` per package; each has a `.dev.va
 
 ### How the MCP endpoint is authenticated
 
-Unreachable and unauthenticated are two independent layers here, deliberately. Deleting the Access application does not silently open the endpoint, and neither does adding a route: **the worker verifies the Access token itself** ([`packages/mcp/src/access.ts`](./packages/mcp/src/access.ts)) and answers anything it cannot verify with a `401`.
+Unreachable and unauthenticated are two independent layers here, deliberately. Deleting the Access application does not silently open the endpoint, and neither does adding a route: **the worker checks Access itself** ([`packages/mcp/src/access.ts`](./packages/mcp/src/access.ts)) and answers anything Access did not authenticate for this application with a `401`.
 
 The mechanism is Access **Managed OAuth**. Default Access answers a non-browser client with a `302` to a login page it cannot complete, which is simply a broken connection for every MCP client; Managed OAuth turns that into a spec-compliant `401` carrying a `WWW-Authenticate` header that points at the OAuth discovery endpoints, and the client runs an authorization-code flow in the user's browser.
 
-One detail of it shapes the implementation. The token the **client** ends up holding is *opaque* (`oauth:…`) and cannot be verified by anyone but Access — the worker never sees it. What the worker sees is a separate signed JWT that Access forwards in `Cf-Access-Jwt-Assertion`, and that is what gets checked: signature against the tenant's published keys, `iss` against the team domain, `alg` pinned to RS256, `exp` required, and **`aud` pinned to this application's audience tag**. That last one is the load-bearing half — every application in one Zero Trust account is signed by the same keys, so a signature-only check would admit users of any of them.
+One detail of it shapes the implementation. The token the **client** ends up holding is *opaque* (`oauth:…`) and cannot be verified by anyone but Access — the worker never sees it. What the worker sees is [`ctx.access`](https://developers.cloudflare.com/workers/configuration/cloudflare-access/), which the Workers runtime populates for a request Access authenticated.
 
-Missing configuration fails closed: with `ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` unset the worker answers `500`, never an unauthenticated `200`.
+Reading the runtime rather than a header is the stronger of the two options, not merely the newer one. A header is request data, trustworthy only for as long as nothing can reach the worker without traversing Access; `ctx.access` cannot be spoofed by a caller at all, and is simply absent when Access did not run — so the gate closes on exactly the case a header check would have to reason about.
+
+What it still has to check is the **audience**: `ctx.access.aud` must match this application's tag. Access authenticating *someone* is not the same claim as Access authenticating them for *this* application, and one Zero Trust account can hold many — another of which may have a far more generous policy.
+
+Missing configuration fails closed: with `ACCESS_AUD` unset the worker answers `500`, never an unauthenticated `200`.
 
 [`docs/access.md`](./docs/access.md) is the setup guide, and [`scripts/setup-access.sh`](./scripts/setup-access.sh) walks it interactively. A full deploy-from-scratch guide — secrets, bindings, migrations and the backfill — is [#13](https://github.com/lswith/imap-mcp/issues/13); the Access half is written.
 

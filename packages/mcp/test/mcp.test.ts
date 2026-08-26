@@ -1,8 +1,9 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import { accessHeaders } from "./support/access";
+import { handleRequest } from "../src/index";
+import { authenticated } from "./support/access";
 import { clearIndex, seedMessage } from "./support/seed";
 
 const ENDPOINT = new URL("https://imap-mcp.invalid/mcp");
@@ -16,18 +17,16 @@ const ENDPOINT = new URL("https://imap-mcp.invalid/mcp");
  */
 async function connect(): Promise<Client> {
   const client = new Client({ name: "test", version: "0.0.0" });
-  // Every request carries an assertion the worker really verifies, because
-  // Access sits in front of this endpoint now (#10) and a client that could
-  // not present one would never reach a tool at all. The signature is genuine
-  // — see test/support/access.ts.
-  const headers = await accessHeaders();
   await client.connect(
     new StreamableHTTPClientTransport(ENDPOINT, {
+      // `handleRequest` rather than `SELF.fetch`, because Access sits in front
+      // of this endpoint now (#10) and a client that could not present an
+      // authenticated context would never reach a tool at all. `SELF` is a
+      // service binding, across which Access deliberately does not propagate
+      // `ctx.access`, so this is the only way in. Everything below the entry
+      // point is still the real thing: real MCP protocol, real handler, real D1.
       fetch: (input, init) =>
-        SELF.fetch(input as RequestInfo, {
-          ...(init as RequestInit),
-          headers: { ...Object.fromEntries(new Headers(init?.headers)), ...headers },
-        }),
+        handleRequest(new Request(input as RequestInfo, init as RequestInit), env, authenticated()),
     }),
   );
   return client;
@@ -143,13 +142,13 @@ describe("mcp server", () => {
     });
     expect(rebound.status).toBe(403);
 
-    // What an MCP client looks like: no Origin at all, and an Access assertion.
+    // What an MCP client looks like: no Origin at all. It gets past the Origin
+    // check; whether it gets past Access is access.test.ts's question.
     const client = await SELF.fetch(ENDPOINT, {
       method: "POST",
-      headers: { "content-type": "application/json", ...(await accessHeaders()) },
+      headers: { "content-type": "application/json" },
       body: "{}",
     });
     expect(client.status).not.toBe(403);
-    expect(client.status).not.toBe(401);
   });
 });

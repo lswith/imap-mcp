@@ -23,11 +23,12 @@
   // deploy of this worker is not reachable from the internet at all.
   //
   // Since #10 that is the second of two independent layers rather than the only
-  // one. The worker verifies the Cloudflare Access JWT itself (src/access.ts)
-  // and answers anything else with a 401, so a route added without an Access
-  // application in front of it is a dead endpoint rather than an open mailbox.
-  // Both layers stay: deleting the Access application must not silently open
-  // this, and neither must adding a route.
+  // one. The worker reads `ctx.access` (src/access.ts) and answers anything the
+  // Cloudflare Access runtime did not authenticate for this application with a
+  // 401 — so a route added without an Access application in front of it is a
+  // dead endpoint rather than an open mailbox. Both layers stay: deleting the
+  // Access application must not silently open this, and neither must adding a
+  // route.
   //
   // Without workers_dev: false the worker would be live at
   // <name>.<account>.workers.dev regardless of any route or Access policy — and
@@ -65,11 +66,11 @@
   //                  Create the Access application FIRST, then the route: a
   //                  route that exists before it answers 401 to everyone,
   //                  including you.
-  //   vars        -- ACCESS_TEAM_DOMAIN / ACCESS_AUD, both required. Their
-  //                  shape is declared in src/env.d.ts, the way packages/sync
-  //                  declares its own; the values are yours and are added
-  //                  here at deploy time. Without them the worker answers
-  //                  500 rather than falling open. See ../../docs/access.md.
+  //   vars        -- ACCESS_AUD, required. Its shape is declared in
+  //                  src/env.d.ts, the way packages/sync declares its own; the
+  //                  value is yours and is added here at deploy time. Without
+  //                  it the worker answers 500 rather than falling open. See
+  //                  ../../docs/access.md.
   //   r2_buckets  -- #9
   //   services    -- binding to imap-mcp-sync for writes (#12)
   //

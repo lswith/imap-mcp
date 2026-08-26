@@ -190,7 +190,7 @@ finish() {
 # carry them upstream.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=7
+TOTAL_STAGES=6
 
 banner "imap-mcp — Cloudflare Access"
 
@@ -229,18 +229,6 @@ write_env MCP_ZONE_NAME "$MCP_ZONE_NAME"
 write_env MCP_ROUTE_PATTERN "$MCP_ROUTE_PATTERN"
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Zero Trust team domain"
-open_url "https://one.dash.cloudflare.com/"
-step "If this is a fresh Zero Trust tenant, you'll be asked to choose a team"
-step "name now. Whatever you pick becomes <team>.cloudflareaccess.com."
-step "Otherwise: Settings -> Custom Pages shows your team domain."
-warn "Include the https:// scheme, and no trailing slash."
-note "It is compared to the token's 'iss' byte for byte, so a stray slash"
-note "rejects every token with an error that reads like a signature problem."
-ask ACCESS_TEAM_DOMAIN "Team domain (https://<team>.cloudflareaccess.com):"
-write_env ACCESS_TEAM_DOMAIN "$ACCESS_TEAM_DOMAIN"
-
-# ── 5 ─────────────────────────────────────────────────────────────────────
 stage "Create the Access application"
 open_url "https://one.dash.cloudflare.com/"
 step "Access controls -> Applications -> Add an application -> Self-hosted."
@@ -260,7 +248,7 @@ warn "Without Managed OAuth, a non-browser client gets a 302 it cannot follow"
 warn "instead of a 401 it can act on, and no MCP client will connect at all."
 pause
 
-# ── 6 ─────────────────────────────────────────────────────────────────────
+# ── 5 ─────────────────────────────────────────────────────────────────────
 stage "Application Audience tag"
 step "Open the application you just made -> Overview tab."
 step "Copy the 'Application Audience (AUD) Tag'. It is a long hex string."
@@ -272,16 +260,15 @@ note "refused here, which is exactly the point."
 ask ACCESS_AUD "Paste the Application Audience tag:"
 write_env ACCESS_AUD "$ACCESS_AUD"
 
-# ── 7 ─────────────────────────────────────────────────────────────────────
+# ── 6 ─────────────────────────────────────────────────────────────────────
 stage "Wire it up and deploy"
 say "Add these to your own copy of packages/mcp/wrangler.jsonc."
 warn "That file is committed to a public repository. These values are yours:"
 warn "do not push them upstream."
+note "No team domain is needed: the worker reads ctx.access from the Workers"
+note "runtime rather than fetching keys or parsing a token."
 say ""
-printf '  "vars": {\n'
-printf '    "ACCESS_TEAM_DOMAIN": "%s",\n' "$ACCESS_TEAM_DOMAIN"
-printf '    "ACCESS_AUD": "%s"\n' "$ACCESS_AUD"
-printf '  },\n'
+printf '  "vars": { "ACCESS_AUD": "%s" },\n' "$ACCESS_AUD"
 printf '  "routes": [{ "pattern": "%s", "custom_domain": true }]\n' "$MCP_ROUTE_PATTERN"
 say ""
 step "Leave workers_dev and preview_urls at false."
@@ -293,7 +280,7 @@ printf '  pnpm --filter @imap-mcp/mcp run deploy\n'
 printf '  curl -sSD- -o /dev/null https://%s/mcp\n' "$MCP_ROUTE_PATTERN"
 say ""
 step "Expect 401 with a www-authenticate header, and NO location header."
-step "A 302 means Managed OAuth is still off — go back to stage 5."
+step "A 302 means Managed OAuth is still off — go back to stage 4."
 note "docs/access.md has the rest of the checks, including the one that"
 note "proves the worker verifies the token rather than trusting the edge."
 
