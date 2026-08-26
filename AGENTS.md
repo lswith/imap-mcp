@@ -323,17 +323,22 @@ model is decided:
   because no expression SQLite can write *is* `normaliseSubject`, and anything
   short of it admits something the check will reject. So the limit no longer
   decides: a scan reads identity and subject only — cheap enough to be wide —
-  TypeScript filters it exactly, and only the survivors are fetched in full. A
-  decoy costs a row in the scan; it cannot cost a genuine reply its place.
+  TypeScript filters it exactly, and only the survivors are fetched in full. And
+  the scan **pages** rather than reading one slice, because a ceiling on rows is
+  a ceiling on how many decoys it takes to hide a genuine reply: raising the
+  number only moves that threshold, so the walk ends on running out of *window*
+  instead. A decoy costs a row in a scan; it cannot cost a genuine reply its
+  place. What remains is a guard in pages, and stopping there — like stopping
+  early with a thread's worth already in hand — is reported as truncation.
 - **What is left for SQL is a superset test, and that is all it has to be.**
   Everything normalisation strips is a reply prefix ending in a colon, so an
   exact match's key is either the needle itself or a colon followed by it.
   Whitespace is removed from both sides rather than collapsed — SQLite has no
   regex to collapse with — and it is every character `\s` matches rather than
   the four obvious ASCII ones, generated with the needle from one exported list
-  (`SUBJECT_WHITESPACE`) whose completeness a BMP scan pins. The scan's own
-  limit is a runaway guard rather than a result cap, and reaching it is reported
-  as truncation rather than passed off as a finished search — as is
+  (`SUBJECT_WHITESPACE`) whose completeness a BMP scan pins. Where it is not
+  known whether anything was left out, "there may be more" is the honest
+  direction to be wrong in — which is also why
   "nothing else belongs to this conversation", which is a claim available only
   when the looking actually finished.
 - **The one subject difference the prefilter cannot see is non-ASCII case**,

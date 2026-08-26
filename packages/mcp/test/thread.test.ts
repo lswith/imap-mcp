@@ -452,13 +452,37 @@ describe("getThread", () => {
       expect(found.truncated).toBe(false);
     });
 
-    it("says so when the prefilter itself ran out of room", async () => {
-      // Distinct from the result cap being reached: rows were dropped before
-      // anything judged them, so members may be missing that would have been
-      // kept. The caller is told rather than left to assume completeness.
+    it("keeps looking past a scan's worth of decoys to reach a real reply", async () => {
+      // More decoys than one scan can carry. A bigger number would only move
+      // the threshold, so the scan pages through the window instead of reading
+      // a fixed slice of it: what ends the search is running out of window, not
+      // running out of rows.
       const at = Date.parse("2026-03-10T09:00:00Z");
       const first = await seedMessage({ subject: "Report from operations", internalDate: at });
-      for (let n = 0; n < SUBJECT_CANDIDATES; n++) {
+      const reply = await seedMessage({
+        subject: "Re: Report from operations",
+        internalDate: at - 60_000,
+      });
+      for (let n = 0; n < SUBJECT_CANDIDATES + 100; n++) {
+        await seedMessage({
+          subject: `URGENT${n}: Report from operations`,
+          internalDate: at + (n + 1) * 60_000,
+        });
+      }
+
+      const found = await thread(first);
+
+      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
+      expect(found.truncated).toBe(false);
+    });
+
+    it("says so when it stopped looking before the window was spent", async () => {
+      // More real members than a thread may carry, so the walk stops with a
+      // thread's worth in hand and never learns what else is out there. The
+      // caller is told, rather than left to read a full page as a full answer.
+      const at = Date.parse("2026-03-10T09:00:00Z");
+      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
+      for (let n = 0; n < MAX_THREAD_MESSAGES + 10; n++) {
         await seedMessage({
           subject: "Re: Report from operations",
           internalDate: at + (n + 1) * 60_000,

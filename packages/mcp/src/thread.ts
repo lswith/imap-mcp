@@ -46,15 +46,24 @@ const MIN_SUBJECT_CHARS = 8;
 export const SUBJECT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * A runaway guard on the scan, not a result limit.
+ * How many rows one page of the subject scan carries.
  *
- * The scan reads two short columns, so it can afford to be wide — and it has to
- * be, because a limit small enough to matter is a limit that decides which
- * rows the exact check sees. This number exists so a pathological window cannot
- * read without bound; reaching it is reported as truncation rather than passed
- * off as a finished search.
+ * Two short columns, so a page can be wide. It is a page rather than a ceiling
+ * because a ceiling on rows is a ceiling on how many decoys it takes to hide a
+ * genuine reply — raising it moves that number, and paging removes it: the scan
+ * walks the window until it runs out of *window*, not out of rows.
  */
 export const SUBJECT_CANDIDATES = 500;
+
+/**
+ * The runaway guard, in pages.
+ *
+ * With the page above this is ten thousand rows, all of which had to pass a
+ * predicate demanding the subject end with this exact one. A window that
+ * densely populated is pathological rather than merely busy, and stopping there
+ * is reported as truncation rather than passed off as a finished search.
+ */
+const MAX_SCAN_PAGES = 20;
 
 /**
  * How the messages were decided to belong together.
@@ -247,11 +256,14 @@ const SUBJECT_KEY = SUBJECT_WHITESPACE.reduce(
   "lower(m.subject)",
 );
 const SUBJECT_SCAN = `
-  SELECT m.id, m.subject
+  SELECT m.id, m.subject, m.internal_date AS internalDate
   FROM messages m
   JOIN folders f ON f.id = m.folder_id
   WHERE ${GENERATION_GUARD}
     AND m.internal_date BETWEEN ?1 AND ?2
+    -- Keyset pagination rather than OFFSET: the pages have to be stable while
+    -- walking, and (internal_date, id) is the same order the scan returns.
+    AND (m.internal_date < ?5 OR (m.internal_date = ?5 AND m.id < ?6))
     AND ( ${SUBJECT_KEY} = ?3
        OR substr(${SUBJECT_KEY}, -(length(?3) + 1)) = ':' || ?3 )
   ORDER BY m.internal_date DESC, m.id DESC
@@ -354,24 +366,43 @@ async function subjectPass(
   seed: ThreadPreview,
   subject: string,
 ): Promise<{ rows: PreviewRow[]; cut: boolean }> {
-  // Identity and subject only. This is the read that has to be allowed to be
-  // wide, so it carries nothing wide: no body preview, no address lists.
-  const { results: scanned } = await db
-    .prepare(SUBJECT_SCAN)
-    .bind(
-      seed.internalDate - SUBJECT_WINDOW_MS,
-      seed.internalDate + SUBJECT_WINDOW_MS,
-      subjectKey(subject),
-      SUBJECT_CANDIDATES,
-    )
-    .all<{ id: number; subject: string }>();
+  const needle = subjectKey(subject);
+  const floor = seed.internalDate - SUBJECT_WINDOW_MS;
+  const ceiling = seed.internalDate + SUBJECT_WINDOW_MS;
 
-  // The decision, and the only one. Everything above it was narrowing.
-  const matched = scanned.filter((row) => normaliseSubject(row.subject) === subject);
-  // Ordered newest first by the scan, so this keeps the recent end of a
-  // conversation — the end worth keeping when there is more than fits.
+  const matched: { id: number }[] = [];
+  // The cursor starts just past the newest row the window can hold.
+  let beforeDate = ceiling + 1;
+  let beforeId = Number.MAX_SAFE_INTEGER;
+  let pages = 0;
+  let exhausted = false;
+
+  // Newest first, and it stops as soon as it has a thread's worth: anything
+  // older than that could not be kept anyway. Otherwise it walks until the
+  // window is spent, which is what makes the number of decoys irrelevant —
+  // they cost a row in a scan rather than a genuine reply its place.
+  while (matched.length < MAX_THREAD_MESSAGES && pages < MAX_SCAN_PAGES) {
+    const { results } = await db
+      .prepare(SUBJECT_SCAN)
+      .bind(floor, ceiling, needle, SUBJECT_CANDIDATES, beforeDate, beforeId)
+      .all<{ id: number; subject: string; internalDate: number }>();
+    pages++;
+
+    // The decision, and the only one. Everything above it was narrowing.
+    for (const row of results) {
+      if (normaliseSubject(row.subject) === subject) matched.push({ id: row.id });
+    }
+
+    const last = results.at(-1);
+    if (results.length < SUBJECT_CANDIDATES || !last) {
+      exhausted = true;
+      break;
+    }
+    beforeDate = last.internalDate;
+    beforeId = last.id;
+  }
+
   const wanted = matched.slice(0, MAX_THREAD_MESSAGES);
-
   // No empty-set guard: the seed's own row matches its own subject exactly, so
   // this list always holds at least it. An empty json_each would be harmless
   // anyway, but a branch nothing can reach is worse than the query it avoids.
@@ -382,9 +413,11 @@ async function subjectPass(
 
   return {
     rows: results,
-    // Two different ways to have left something out, and both are the same
-    // thing to a reader: the scan hit its guard, or more subjects matched than
-    // a thread may carry.
-    cut: scanned.length === SUBJECT_CANDIDATES || matched.length > wanted.length,
+    // Two ways to have left something out, and they are one thing to a reader:
+    // the walk stopped before the window was spent — because it had a thread's
+    // worth already, or because it ran out of pages — or more subjects matched
+    // than a thread may carry. Where it is not known, "there may be more" is
+    // the honest direction to be wrong in.
+    cut: !exhausted || matched.length > wanted.length,
   };
 }
