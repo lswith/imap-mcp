@@ -258,10 +258,22 @@ model is decided:
   fires only when the header pass finds nothing beyond the seed.
 - **The subject fallback is bounded three ways and says that it fired.** A
   30-day window, a minimum subject length below which it does not run at all,
-  and exact equality on the normalised subject re-checked in TypeScript — SQL
-  only narrows, with `instr(lower(subject), ?)`, and TypeScript decides. It has
+  and exact equality on the normalised subject re-checked in TypeScript. It has
   no cryptographic tie between the messages it groups, so the note after the
   closing tag says outright that the grouping is a guess.
+- **SQL narrows and TypeScript decides — but the narrowing has to be tight, not
+  merely correct.** The limit cuts the candidate set *before* the exact check
+  runs, so a superset prefilter is a way to starve it: with
+  `instr(lower(subject), ?)`, fifty newer "X — daily digest 47" subjects could
+  fill the limit and the genuine reply would never be judged. The test is
+  anchored at the end instead — `substr(rtrim(lower(m.subject)), -length(?)) =
+  ?` — because everything normalisation strips is a *prefix*, which makes the
+  normalised subject a suffix of the raw one. Still `=` against a `substr` and
+  never `LIKE`: `_` is a wildcard and is common in real subjects. And the
+  candidate limit is deliberately larger than the result cap, because the two
+  answer different questions — one bounds what reaches a model, the other what
+  the exact check is allowed to look at. When the prefilter is the thing that
+  ran out of room, the answer reports it.
 - **`json_each` through D1's `prepare`/`bind` is load-bearing, and pinned by its
   own test** (`test/thread.test.ts`). The header pass binds its whole identity
   closure as one JSON array. If a workerd bump ever takes json1's table-valued

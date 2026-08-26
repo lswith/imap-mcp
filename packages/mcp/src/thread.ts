@@ -46,6 +46,16 @@ const MIN_SUBJECT_CHARS = 8;
 export const SUBJECT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
+ * How many rows the subject prefilter may return before TypeScript judges them.
+ *
+ * Deliberately larger than the number that can be *kept*, because these two
+ * limits answer different questions. The result cap bounds what reaches a
+ * model; this one bounds what the exact check gets to look at, and setting them
+ * equal is what let unrelated newer mail decide the outcome by arriving first.
+ */
+export const SUBJECT_CANDIDATES = MAX_THREAD_MESSAGES * 4;
+
+/**
  * How the messages were decided to belong together.
  *
  * Rendered outside the frame, because it is an assertion this server is making
@@ -165,12 +175,25 @@ const HEADER_PASS = `
 /**
  * The fallback: same normalised subject, near the same time.
  *
- * SQL narrows and TypeScript decides. `instr(lower(subject), needle)` is a
- * superset test — it matches "Re: X", "Fwd: Re: X" and the unrelated "X meeting
- * notes" alike — and every row it returns is re-checked for exact equality on
- * the normalised subject. Two known imprecisions in the prefilter, SQLite's
- * ASCII-only lower() and irregular internal whitespace, can only cause a miss,
- * never a false include, because the check in TypeScript is what decides.
+ * SQL narrows and TypeScript decides — but the narrowing has to be tight, not
+ * merely correct, because the SQL limit cuts the candidate set *before* the
+ * exact check runs. A superset test like `instr(lower(subject), needle) > 0`
+ * matched "Re: X", "Fwd: Re: X" and the unrelated "X — daily digest 47" alike,
+ * so fifty newer digests could fill the limit and the genuine reply would never
+ * be judged at all: the conversation would come back missing members, or with
+ * the seed reported as alone.
+ *
+ * So the test is **anchored at the end**. Everything normalisation removes —
+ * `Re:`, `Fwd:`, `Re[2]:` — is a prefix, which makes the normalised subject a
+ * suffix of the raw one; comparing the tail keeps every reply form and drops
+ * the whole class of subjects that merely carry the seed's as a prefix. It is
+ * still `=` against a `substr`, never `LIKE`, so there is no pattern language
+ * for a subject to smuggle a wildcard through: `_` is common in real subjects.
+ *
+ * Three imprecisions remain in the prefilter, and each can only cause a miss,
+ * never a false include, because TypeScript is what decides: SQLite's `lower()`
+ * is ASCII-only, `rtrim()` strips spaces but not tabs, and a subject whose
+ * internal whitespace is irregular will not match the collapsed needle.
  */
 const SUBJECT_PASS = `
   SELECT ${PREVIEW_COLUMNS}
@@ -178,7 +201,7 @@ const SUBJECT_PASS = `
   JOIN folders f ON f.id = m.folder_id
   WHERE ${GENERATION_GUARD}
     AND m.internal_date BETWEEN ?1 AND ?2
-    AND instr(lower(m.subject), ?3) > 0
+    AND substr(rtrim(lower(m.subject)), -length(?3)) = ?3
   ORDER BY m.internal_date DESC, m.id DESC
   LIMIT ?4`;
 
@@ -191,9 +214,16 @@ export async function getThread(db: D1Database, input: { id: number }): Promise<
   let basis: ThreadBasis = "references";
   let rows = closure.length === 0 ? [] : await headerPass(db, closure);
 
+  let prefilterCut = false;
   if (rows.every((row) => row.id === seed.id)) {
     const subject = normaliseSubject(seed.subject);
-    rows = subject.length < MIN_SUBJECT_CHARS ? [] : await subjectPass(db, seed, subject);
+    if (subject.length < MIN_SUBJECT_CHARS) {
+      rows = [];
+    } else {
+      const candidates = await subjectPass(db, seed, subject);
+      rows = candidates.rows;
+      prefilterCut = candidates.cut;
+    }
     basis = "subject";
   }
 
@@ -203,7 +233,7 @@ export async function getThread(db: D1Database, input: { id: number }): Promise<
   // newest first, so filling to the cap from there keeps the recent end of a
   // conversation, which is the end worth keeping.
   messages.set(seed.id, seed);
-  let truncated = false;
+  let truncated = prefilterCut;
   for (const row of rows) {
     if (messages.has(row.id)) continue;
     if (messages.size >= MAX_THREAD_MESSAGES) {
@@ -242,19 +272,30 @@ async function headerPass(db: D1Database, closure: string[]): Promise<PreviewRow
   return results;
 }
 
+/**
+ * Candidates, and whether the prefilter itself ran out of room.
+ *
+ * `cut` is not the same fact as the result cap being reached: it says older
+ * rows were dropped before anything judged them, so the answer may be missing
+ * members it would otherwise have kept. It is reported rather than hidden.
+ */
 async function subjectPass(
   db: D1Database,
   seed: ThreadPreview,
   subject: string,
-): Promise<PreviewRow[]> {
+): Promise<{ rows: PreviewRow[]; cut: boolean }> {
   const { results } = await db
     .prepare(SUBJECT_PASS)
     .bind(
       seed.internalDate - SUBJECT_WINDOW_MS,
       seed.internalDate + SUBJECT_WINDOW_MS,
       subject,
-      MAX_THREAD_MESSAGES + 1,
+      SUBJECT_CANDIDATES,
     )
     .all<PreviewRow>();
-  return results.filter((row) => normaliseSubject(row.subject) === subject);
+
+  return {
+    rows: results.filter((row) => normaliseSubject(row.subject) === subject),
+    cut: results.length === SUBJECT_CANDIDATES,
+  };
 }

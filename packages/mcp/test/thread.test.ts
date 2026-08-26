@@ -7,6 +7,7 @@ import {
   MAX_THREAD_IDS,
   MAX_THREAD_MESSAGES,
   normaliseSubject,
+  SUBJECT_CANDIDATES,
   SUBJECT_WINDOW_MS,
 } from "../src/thread";
 import { clearIndex, seedMessage } from "./support/seed";
@@ -317,6 +318,49 @@ describe("getThread", () => {
 
       expect(found.messages.map((message) => message.id)).not.toContain(decoy);
       expect(found.basis).toBe("alone");
+    });
+
+    it("is not starved of real matches by messages that merely contain the subject", async () => {
+      // The prefilter is a superset test and the exact check happens in
+      // TypeScript, so anything the SQL limit cuts is decided before it is
+      // judged. A daily digest whose subject carries the seed's as a prefix
+      // must not be able to push the genuine reply out of the candidate set.
+      const at = Date.parse("2026-03-10T09:00:00Z");
+      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
+      const reply = await seedMessage({
+        subject: "Re: Report from operations",
+        internalDate: at - 60_000,
+      });
+      for (let n = 0; n < MAX_THREAD_MESSAGES + 10; n++) {
+        await seedMessage({
+          subject: `Report from operations — daily digest ${n}`,
+          internalDate: at + (n + 1) * 60_000,
+        });
+      }
+
+      const found = await thread(first);
+
+      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
+      expect(found.basis).toBe("subject");
+    });
+
+    it("says so when the prefilter itself ran out of room", async () => {
+      // Distinct from the result cap being reached: rows were dropped before
+      // anything judged them, so members may be missing that would have been
+      // kept. The caller is told rather than left to assume completeness.
+      const at = Date.parse("2026-03-10T09:00:00Z");
+      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
+      for (let n = 0; n < SUBJECT_CANDIDATES; n++) {
+        await seedMessage({
+          subject: "Re: Report from operations",
+          internalDate: at + (n + 1) * 60_000,
+        });
+      }
+
+      const found = await thread(first);
+
+      expect(found.truncated).toBe(true);
+      expect(found.messages).toHaveLength(MAX_THREAD_MESSAGES);
     });
 
     it("runs for a seed carrying no Message-ID and no references", async () => {

@@ -299,7 +299,11 @@ descendants at once. When those headers link nothing at all — plenty of client
 strip them — it falls back to a matching subject within 30 days, bounded by a
 minimum subject length and re-checked exactly in TypeScript, and **the answer
 says which of the two happened**, because a subject match is a guess and should
-read as one. A message filed in several folders comes back once per copy rather
+read as one. The database query behind that fallback is anchored at the end of
+the subject rather than searching anywhere inside it: the prefixes replies add
+are prefixes, so a suffix test keeps every reply form while refusing the
+unrelated mail that merely starts the same way — which would otherwise be able
+to crowd the genuine replies out of the answer. A message filed in several folders comes back once per copy rather
 than collapsed, since each copy is a different message on the server and that
 triple is what the write tools will act on.
 
