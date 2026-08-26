@@ -185,9 +185,13 @@ finish() {
 #
 # Nothing account-specific is baked in: this file is committed to a public
 # repository, so every value is prompted for. What it collects lands in a
-# gitignored .env; the two that the worker actually reads are then pasted into
-# your own copy of packages/mcp/wrangler.jsonc, which is committed and must not
-# carry them upstream.
+# gitignored .env, and scripts/deploy-config.mjs generates the wrangler config
+# a deploy uses from there. No committed file is ever edited, so there is
+# nothing to accidentally push upstream.
+#
+# The order below is not the order the docs used to give, and the difference
+# matters: Access is attached to the WORKER rather than to a hostname, and you
+# cannot attach a Worker that does not exist yet. So the deploy comes first.
 # ──────────────────────────────────────────────────────────────────────────
 
 TOTAL_STAGES=6
@@ -202,9 +206,9 @@ step "You need a Cloudflare account with Zero Trust enabled and an identity"
 step "provider configured. The free plan covers 50 users."
 step "You need a zone on that account to hang the hostname off."
 step "You need Workers Paid — for the sync worker's queues, not for Access."
-note "Nothing here is irreversible. Deleting the Access application later"
-note "leaves the endpoint closed, not open: the worker verifies the token"
-note "itself and refuses anything it cannot verify."
+note "Nothing here is irreversible, and nothing here is briefly open. The"
+note "worker refuses every request Access did not authenticate for it, so a"
+note "deploy without an Access application is a dead endpoint, not an open one."
 confirm "Ready to go?" || exit 0
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
@@ -218,100 +222,101 @@ write_env CLOUDFLARE_ACCOUNT_ID "$CLOUDFLARE_ACCOUNT_ID"
 # ── 3 ─────────────────────────────────────────────────────────────────────
 stage "Hostname"
 say "Choose the hostname the MCP worker will answer on. It must be a zone on"
-say "the account above, and it is also the hostname the Access application"
-say "will protect — the two have to match exactly."
-note "Something like mail-mcp.example.com. Not a workers.dev hostname:"
-note "an Access application cannot cover one, which is why workers_dev stays"
-note "false in packages/mcp/wrangler.jsonc."
+say "the account above."
+note "Something like mail-mcp.example.com. This is the ROUTE only — Access"
+note "attaches to the Worker itself, so it covers every route the Worker ever"
+note "has, this one included."
 ask MCP_ZONE_NAME "Zone name (e.g. example.com):"
 ask MCP_ROUTE_PATTERN "Full hostname for the MCP endpoint:"
 write_env MCP_ZONE_NAME "$MCP_ZONE_NAME"
 write_env MCP_ROUTE_PATTERN "$MCP_ROUTE_PATTERN"
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Create the Access application"
-open_url "https://one.dash.cloudflare.com/"
-step "Access controls -> Applications -> Add an application -> Self-hosted."
-step "Application name: imap-mcp"
-step "Public hostname: $MCP_ROUTE_PATTERN"
-step "Add a policy: action Allow, one rule, Emails -> your own address."
-warn "Make sure no Bypass policy exists on this hostname."
+stage "Deploy the workers"
+say "Access attaches to the Worker, and you cannot attach one that does not"
+say "exist. So the workers get deployed first — with no route and no audience"
+say "tag yet."
 say ""
-say "Then, under Advanced settings — this is the step everything depends on:"
-step "Turn ON 'Managed OAuth'."
-step "Turn on 'Allow localhost clients' and 'Allow loopback clients'"
-step "  (Claude Code redirects to a loopback address)."
-step "Add https://claude.ai/api/mcp/auth_callback to the allowed redirect"
-step "  URIs (the claude.ai custom connector)."
-step "Access token lifetime 5-15 minutes; session duration 1-2 weeks."
-warn "Without Managed OAuth, a non-browser client gets a 302 it cannot follow"
-warn "instead of a 401 it can act on, and no MCP client will connect at all."
-pause
-
-# ── 5 ─────────────────────────────────────────────────────────────────────
-stage "Application Audience tag"
-step "Open the application you just made -> Overview tab."
-step "Copy the 'Application Audience (AUD) Tag'. It is a long hex string."
-warn "It must be THIS application's tag."
-note "Every application in one Zero Trust account is signed by the same keys,"
-note "so the audience is the only thing that tells them apart — and the worker"
-note "pins it. A validly-signed token for another of your applications is"
-note "refused here, which is exactly the point."
-ask ACCESS_AUD "Paste the Application Audience tag:"
-write_env ACCESS_AUD "$ACCESS_AUD"
-
-# ── 6 ─────────────────────────────────────────────────────────────────────
-stage "Wire it up and deploy"
-say "The Access side is done. What is left is the deploy, and the ORDER of it"
-say "matters more than it looks."
+warn "That is safe, and it is worth knowing why rather than trusting it:"
+note "no route and workers_dev/preview_urls false means nothing can reach the"
+note "MCP worker at all; and with ACCESS_AUD unset it answers 500 to every"
+note "request even if something could. The gate fails closed."
 say ""
 warn "Deploy imap-mcp-sync FIRST, if you have not already."
 note "Neither wrangler.jsonc commits a database_id, so whichever worker you"
-note "deploy first provisions the D1 database that BOTH of them share, and"
-note "wrangler writes the id back into that worker's config. Deploy this one"
-note "first and you provision the database from the wrong side; the second"
-note "deploy then makes a SECOND database, and nothing errors -- the MCP"
-note "server just serves an empty index for ever."
+note "deploy first provisions the D1 database that BOTH of them share. Deploy"
+note "this one first and the second deploy makes a SECOND database; nothing"
+note "errors, the MCP server just serves an empty index for ever."
 note "See README.md -> First deploy. Queues needs a Workers Paid plan."
 say ""
 
 if confirm "Has imap-mcp-sync already been deployed to this account?"; then
-  say "Good. Then, in this order:"
+  say "Good. Then run:"
 else
-  say "Do that first -- README.md -> First deploy walks it. Then come back and"
-  say "run these, in this order:"
+  say "Do that first -- README.md -> First deploy walks it. Then run, in order:"
   say ""
   printf '  pnpm --filter @imap-mcp/sync run deploy\n'
 fi
 
 say ""
 printf '  pnpm run db:migrate:remote\n'
-step "Applies the schema. Re-running it is a no-op."
-say ""
-step "Then add these to your own copy of packages/mcp/wrangler.jsonc:"
-say ""
-printf '  "vars": { "ACCESS_AUD": "%s" },\n' "$ACCESS_AUD"
-printf '  "routes": [{ "pattern": "%s", "custom_domain": true }]\n' "$MCP_ROUTE_PATTERN"
-say ""
-step "Leave workers_dev and preview_urls at false."
-note "No team domain is needed: the worker reads ctx.access from the Workers"
-note "runtime rather than fetching keys or parsing a token."
-warn "wrangler.jsonc is committed to a public repository. These values are"
-warn "yours, and so is the database_id the next command writes back into it:"
-warn "do not push any of them upstream."
-say ""
-confirm "Added them?" || exit 0
-say ""
 printf '  pnpm --filter @imap-mcp/mcp run deploy\n'
 say ""
-warn "Check the database_id wrangler writes into packages/mcp/wrangler.jsonc"
-warn "matches the one in packages/sync/wrangler.jsonc. If they differ you have"
-warn "two databases, and the symptom is silence rather than an error."
+step "The schema apply is a no-op if re-run."
+note "The deploy scripts regenerate a gitignored wrangler config from your"
+note ".env first, so packages/*/wrangler.jsonc is never edited. The database"
+note "id wrangler provisions is recorded back into .env automatically."
 say ""
+confirm "Both workers deployed?" || exit 0
+
+# ── 5 ─────────────────────────────────────────────────────────────────────
+stage "Create the Access application"
+open_url "https://one.dash.cloudflare.com/"
+say "Access controls -> Applications -> Add an application -> Self-hosted."
+say "The dashboard wants these in this order:"
+say ""
+step "1. Destinations -> 'Add Workers' -> pick imap-mcp-server."
+note "   Not a public hostname. Attaching the Worker is what Cloudflare calls"
+note "   the safest way to gate one: it covers every route, Custom Domain and"
+note "   workers.dev URL at once, rather than the single URL you name."
+step "2. Leave the application name alone — it defaults once the"
+step "   destination is set."
+step "3. Access policies -> Create new policy -> Allow, one rule,"
+step "   Emails -> your own address."
+warn "   No Bypass policy on this application."
+step "4. Authentication -> turn OFF 'Accept all available identity"
+step "   providers', then select your identity provider explicitly."
+say ""
+say "Then the Additional settings tab — this is the step everything depends on:"
+step "5. Turn ON 'Managed OAuth'."
+step "6. Allow localhost clients and loopback clients (Claude Code"
+step "   redirects to a loopback address)."
+step "7. Add https://claude.ai/api/mcp/auth_callback to the allowed"
+step "   redirect URIs (the claude.ai custom connector)."
+step "8. Access token lifetime 5-15 minutes; session duration 1-2 weeks."
+warn "Without Managed OAuth, a non-browser client gets a 302 it cannot follow"
+warn "instead of a 401 it can act on, and no MCP client will connect at all."
+pause
+
+# ── 6 ─────────────────────────────────────────────────────────────────────
+stage "Audience tag, route, and re-deploy"
+step "Still on the Additional settings tab, copy the"
+step "'Application Audience (AUD) Tag'. It is a long hex string."
+warn "It must be THIS application's tag."
+note "Every application in one Zero Trust account shares a tenant, so the"
+note "audience is the only thing that tells them apart -- and the worker pins"
+note "it. A token for another of your applications is refused here, which is"
+note "exactly the point."
+ask ACCESS_AUD "Paste the Application Audience tag:"
+write_env ACCESS_AUD "$ACCESS_AUD"
+say ""
+say "That is everything. Re-deploy to pick up the audience and the route:"
+say ""
+printf '  pnpm --filter @imap-mcp/mcp run deploy\n'
 printf '  curl -sSD- -o /dev/null https://%s/mcp\n' "$MCP_ROUTE_PATTERN"
 say ""
 step "Expect 401 with a www-authenticate header, and NO location header."
-step "A 302 means Managed OAuth is still off -- go back to stage 4."
+step "A 302 means Managed OAuth is still off -- go back to stage 5."
 say ""
 note "That curl passes whether or not the gate works, though: a request with no"
 note "Access context is refused either way. The check that actually proves it"

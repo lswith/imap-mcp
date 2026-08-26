@@ -62,8 +62,8 @@ Everything you would need to supply is named and explained in [`.env.example`](.
 | What | Where it goes |
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | your environment; wrangler reads it directly |
-| Route / zone for the MCP worker | a `routes` entry you add to `packages/mcp/wrangler.jsonc` |
-| `ACCESS_AUD` | a `vars` entry in `packages/mcp/wrangler.jsonc`; **required** — the worker answers `500` without it |
+| Route / zone for the MCP worker | `MCP_ROUTE_PATTERN` in your `.env`; generated into the deploy config |
+| `ACCESS_AUD` | your `.env`; generated into a gitignored wrangler config at deploy time. **Required** — the worker answers `500` without it |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in `packages/sync/wrangler.jsonc` |
 | `SYNC_FOLDERS` and the four sizing vars | `vars` in `packages/sync/wrangler.jsonc`; all optional |
 | `IMAP_PASSWORD` | `wrangler secret put`, sync worker only — never a `vars` entry |
@@ -82,6 +82,8 @@ Unreachable and unauthenticated are two independent layers here, deliberately. D
 
 The mechanism is Access **Managed OAuth**. Default Access answers a non-browser client with a `302` to a login page it cannot complete, which is simply a broken connection for every MCP client; Managed OAuth turns that into a spec-compliant `401` carrying a `WWW-Authenticate` header that points at the OAuth discovery endpoints, and the client runs an authorization-code flow in the user's browser.
 
+Access is attached to the **Worker**, not to a hostname, so it covers every route, Custom Domain and `workers.dev` URL the Worker ever has rather than one exact URL. That makes `workers_dev: false` defence in depth rather than the only thing holding the line — and it is why the workers are deployed *before* the Access application exists, since you cannot attach a Worker that does not.
+
 One detail of it shapes the implementation. The token the **client** ends up holding is *opaque* (`oauth:…`) and cannot be verified by anyone but Access — the worker never sees it. What the worker sees is [`ctx.access`](https://developers.cloudflare.com/workers/configuration/cloudflare-access/), which the Workers runtime populates for a request Access authenticated.
 
 Reading the runtime rather than a header is the stronger of the two options, not merely the newer one. A header is request data, trustworthy only for as long as nothing can reach the worker without traversing Access; `ctx.access` cannot be spoofed by a caller at all, and is simply absent when Access did not run — so the gate closes on exactly the case a header check would have to reason about.
@@ -91,6 +93,8 @@ What it still has to check is the **audience**: `ctx.access.aud` must match this
 Missing configuration fails closed: with `ACCESS_AUD` unset the worker answers `500`, never an unauthenticated `200`.
 
 [`docs/access.md`](./docs/access.md) is the setup guide, and [`scripts/setup-access.sh`](./scripts/setup-access.sh) walks it interactively. Note that the MCP worker is not deployed on its own: `imap-mcp-sync` goes first, because it provisions the D1 database both workers share — see [First deploy](#first-deploy). A full deploy-from-scratch guide — secrets, bindings, migrations and the backfill — is [#13](https://github.com/lswith/imap-mcp/issues/13); the Access half is written.
+
+**No committed file is edited to deploy.** `pnpm run deploy` runs [`scripts/deploy-config.mjs`](./scripts/deploy-config.mjs) first, which merges your `.env` into a copy of the committed `wrangler.jsonc` and writes it under the gitignored `.wrangler/`, using wrangler's [redirected configuration](https://developers.cloudflare.com/workers/wrangler/configuration/). The audience tag, the route and the `database_id` wrangler writes back therefore all stay out of git — "nothing deployment-specific is committed" becomes a mechanism rather than a promise, and no private fork is needed to run this against your own account. With no `.env` the script no-ops and wrangler reads the committed config, exactly as a fresh clone does.
 
 ## Storage
 

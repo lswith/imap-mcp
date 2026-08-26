@@ -10,7 +10,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test",
+    "test": "node --test scripts/*.test.mjs && pnpm -r run test",
     "build": "pnpm -r run build",
     "dead-code": "knip",
     "db:migrate:local": "pnpm --filter @imap-mcp/sync exec wrangler d1 migrations apply imap-mcp --local",

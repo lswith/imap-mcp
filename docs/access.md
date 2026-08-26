@@ -24,7 +24,7 @@ The mechanism is Access **Managed OAuth**, and one detail of it explains the
 rest of this page:
 
 ```
-  MCP client                Cloudflare Access               this worker
+  MCP client                Cloudflare Access            imap-mcp-server
       │                            │                             │
       │── request, no token ──────▶│                             │
       │◀─ 401 + WWW-Authenticate ──│   (not a 302 — that is       │
@@ -54,6 +54,28 @@ What the worker still has to check is the **audience**. Access authenticating
 someone is not the same claim as Access authenticating them for *this*
 application, and one Zero Trust account can hold many.
 
+### Access attaches to the Worker, not to a hostname
+
+The application's destination is the **Worker**, not `mail-mcp.example.com`.
+Cloudflare calls this "the safest and most straightforward way to put
+authentication in front of a Worker", and it earns that here: it covers every
+route, Custom Domain and `workers.dev` URL the Worker ever has, rather than the
+one URL you name. `workers_dev: false` stays, but it is now defence in depth
+rather than the only thing standing between the internet and the mailbox.
+
+One constraint comes with it: worker-level Access does not support WebSockets.
+MCP Streamable HTTP is POST + SSE, so this is fine today — but a future tool
+that reached for WebSockets would have to move back to a hostname destination.
+
+**This is why the deploy comes before the Access application.** You cannot
+attach a Worker that does not exist. The sequence is safe at every point:
+
+| After | Reachable? | Why |
+| --- | --- | --- |
+| Workers deployed, no route, no `ACCESS_AUD` | No | No route, `workers_dev`/`preview_urls` false. And an unset `ACCESS_AUD` is a `500`, not an open endpoint |
+| Access attached to the Worker | No | Still no route — and Access now covers every route it could ever have |
+| Audience + route added, redeployed | Yes, gated | `ctx.access` checked, audience pinned |
+
 Default Access answers a non-browser client with a `302` to a login page it
 cannot complete. Managed OAuth is what turns that into a spec-compliant `401`
 with a `WWW-Authenticate` header. **It is off by default and must be turned
@@ -65,47 +87,16 @@ only ever works from Claude Code.
 
 ## Setting it up
 
-1. **Zero Trust → Access controls → Applications → Add an application →
-   Self-hosted.** Give it the hostname you intend to serve the worker on, e.g.
-   `mail-mcp.example.com` on a zone you hold. That hostname must match the
-   `routes` entry you add in step 6.
+`scripts/setup-access.sh` walks these interactively and records what it collects
+in a gitignored `.env`. Nothing below edits a committed file: the deploy scripts
+generate the wrangler config they use from `.env` (see
+`scripts/deploy-config.mjs`), so `packages/*/wrangler.jsonc` stays as shipped.
 
-2. **Add a policy.** Action *Allow*, one rule, `Emails` → your own address. This
-   is read access to your entire mail archive; there is no reason for it to be
-   broader. Make sure no *Bypass* policy exists on the same hostname.
-
-3. **Advanced settings → turn on Managed OAuth.** This is the step everything
-   else depends on. While you are there:
-   - *Allow localhost clients* and *Allow loopback clients* — Claude Code needs
-     these for its redirect.
-   - Add `https://claude.ai/api/mcp/auth_callback` to the allowed redirect URIs,
-     for the claude.ai custom connector.
-   - Access token lifetime 5–15 minutes, session duration 1–2 weeks, is a
-     reasonable pairing for CLI and agent clients.
-
-4. **Overview tab → copy the Application Audience Tag.** A hex string. This is
-   `ACCESS_AUD`, and it must be *this* application's tag: every application in
-   one Zero Trust account is signed by the same keys, so the audience is the
-   only thing that distinguishes them — and the worker pins it.
-
-5. **Add the `var` and the `routes` entry to your own copy of
-   `packages/mcp/wrangler.jsonc`.** Neither is committed; this repository is
-   public.
-
-   ```jsonc
-   "vars": { "ACCESS_AUD": "<application audience tag>" },
-   "routes": [{ "pattern": "mail-mcp.example.com", "custom_domain": true }]
-   ```
-
-   Leave `workers_dev` and `preview_urls` at `false`. A `workers.dev` hostname
-   is not one your Access application covers.
-
-6. **Deploy — in this order.** Neither `wrangler.jsonc` commits a
-   `database_id`, so whichever worker you deploy first provisions the D1
-   database *both* share, and wrangler writes the id back into that worker's
-   config. Deploying this one first provisions it from the wrong side, and the
-   second deploy then creates a second database. Nothing errors; the MCP server
-   just serves an empty index for ever.
+1. **Deploy both workers first**, in this order. Neither `wrangler.jsonc`
+   commits a `database_id`, so whichever worker deploys first provisions the D1
+   database *both* share — deploy the MCP worker first and the second deploy
+   creates a second database. Nothing errors; the MCP server just serves an
+   empty index for ever.
 
    ```bash
    pnpm --filter @imap-mcp/sync run deploy   # first — provisions D1. See
@@ -114,10 +105,50 @@ only ever works from Claude Code.
    pnpm --filter @imap-mcp/mcp run deploy    # then this one
    ```
 
-   Afterwards, check that the `database_id` wrangler wrote into
-   `packages/mcp/wrangler.jsonc` matches the one in
-   `packages/sync/wrangler.jsonc`. Both ids are yours — don't push them
-   upstream.
+   At this point the MCP worker exists but has no route and no `ACCESS_AUD`, so
+   it is unreachable — and would answer `500` if it were. Both are deliberate.
+
+2. **Zero Trust → Access controls → Applications → Add an application →
+   Self-hosted**, filling it in in this order:
+   1. **Destinations → Add Workers → `imap-mcp-server`.** Not a public
+      hostname — see above.
+   2. Leave the **application name** alone; it defaults once the destination is
+      set.
+   3. **Access policies → Create new policy** → Allow, one rule, `Emails` →
+      your own address. This is read access to your entire mail archive; there
+      is no reason for it to be broader. No *Bypass* policy on this application.
+   4. **Authentication** → turn **off** *Accept all available identity
+      providers*, then select your identity provider explicitly.
+
+3. **Additional settings → turn on Managed OAuth.** This is the step everything
+   else depends on. While you are there:
+   - *Allow localhost clients* and *Allow loopback clients* — Claude Code needs
+     these for its redirect.
+   - Add `https://claude.ai/api/mcp/auth_callback` to the allowed redirect URIs,
+     for the claude.ai custom connector.
+   - Access token lifetime 5–15 minutes, session duration 1–2 weeks, is a
+     reasonable pairing for CLI and agent clients.
+
+4. **Additional settings → copy the Application Audience Tag.** A hex string,
+   on the same tab. This is `ACCESS_AUD`, and it must be *this* application's
+   tag: every application in one Zero Trust account is signed by the same keys,
+   so the audience is the only thing that distinguishes them — and the worker
+   pins it.
+
+5. **Record the audience and the hostname in `.env`**, then redeploy:
+
+   ```bash
+   ACCESS_AUD=<application audience tag>
+   MCP_ROUTE_PATTERN=mail-mcp.example.com
+   ```
+
+   ```bash
+   pnpm --filter @imap-mcp/mcp run deploy
+   ```
+
+   The deploy regenerates the config, which adds the audience as a `var` and the
+   hostname as a Custom Domain route. `workers_dev` and `preview_urls` stay
+   `false`.
 
 ## Checking it worked
 
@@ -158,8 +189,8 @@ Then the clients:
 | Symptom | Cause |
 | --- | --- |
 | `302` instead of `401` | Managed OAuth is off (step 4) |
-| Every request `500` | `ACCESS_AUD` is unset. The gate fails closed rather than falling open — this is working as designed |
+| Every request `500` | `ACCESS_AUD` is not in your `.env`, or you have not redeployed since adding it. Expected before step 5 — the gate fails closed rather than falling open |
 | Every request `401`, even after a successful login | Either the AUD in `wrangler.jsonc` belongs to a different application, or `ctx.access` is not reaching the worker. Check the AUD first; see the note under "Checking it worked" for the second |
 | `503` | The worker could not reach `<team>.cloudflareaccess.com/cdn-cgi/access/certs`. Deliberately not a `401`: telling a client its good token was revoked costs the user a browser window for what is usually a blip |
 | `403` | The Origin check, not Access. A browser on another site — including a DNS-rebound one carrying a real Access cookie — is refused before its identity is considered |
-| `401` locally under `wrangler dev` | Expected. Access is not in front of a local worker, so `ctx.access` is undefined. Add an `access.dev` block to your own copy of `wrangler.jsonc` to simulate a signed-in user — see `packages/mcp/.dev.vars.example` |
+| `401` locally under `wrangler dev` | Expected — Access is not in front of a local worker. With `ACCESS_AUD` in `.env` the generated config carries an `access.dev` block that simulates a signed-in user; `wrangler dev` follows the same redirect `deploy` does |
