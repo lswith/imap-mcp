@@ -44,6 +44,15 @@ export type SyncConfig = {
   maxChunksPerRun: number;
   /** Only index mail received on or after this date, if set. */
   since?: Date;
+  /**
+   * The address a draft is written From (#12). Separate from `username`
+   * because iCloud's LOGIN takes the local part only, so the credential is not
+   * an address; a draft with no From is still legal, and Apple Mail fills one
+   * in when you send it.
+   */
+  draftFrom?: string;
+  /** Overrides where a draft is appended, when the mailbox names it neither. */
+  draftsFolder?: string;
 };
 
 export function readSyncConfig(env: Env): SyncConfig {
@@ -69,6 +78,14 @@ export function readSyncConfig(env: Env): SyncConfig {
 
   const since = isoDate(env.SYNC_SINCE, "SYNC_SINCE");
   if (since) config.since = since;
+
+  const draftFrom = env.DRAFT_FROM?.trim();
+  if (draftFrom) config.draftFrom = draftFrom;
+  else if (config.username.includes("@")) config.draftFrom = config.username;
+
+  const draftsFolder = env.DRAFTS_FOLDER?.trim();
+  if (draftsFolder) config.draftsFolder = draftsFolder;
+
   return config;
 }
 

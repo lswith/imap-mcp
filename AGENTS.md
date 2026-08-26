@@ -18,6 +18,10 @@ pnpm workspace, two deployable Workers and one library:
   binding.
 - `packages/imap` (`@imap-mcp/imap`) — library, not a worker. The internal
   mailbox interface, and the only place `cf-imap` is imported.
+- `packages/writes` (`@imap-mcp/writes`) — library, not a worker, and types
+  only: the write contract both workers are written against. It imports
+  **nothing**, which is what lets it sit between a worker that holds the mailbox
+  credential and one that must never see it.
 
 `migrations/` at the repo root is the D1 schema, shared rather than owned by
 either worker: both `wrangler.jsonc` files point `migrations_dir` at it.
@@ -25,7 +29,9 @@ either worker: both `wrangler.jsonc` files point `migrations_dir` at it.
 That split is load-bearing, not stylistic: it keeps the credential in one
 worker. Do not give `packages/mcp` an IMAP connection, and do not add
 `@imap-mcp/imap` to its dependencies — `packages/sync` is the only package that
-may depend on it.
+may depend on it. `@imap-mcp/writes` is the seam that makes that liveable:
+when the two workers need to agree on a shape, it goes there, not into a
+type-only import across the split.
 
 ## Build & Test
 
@@ -80,10 +86,10 @@ pnpm run deploy      # wrangler deploy
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
 (`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6), incremental
-sync (#8), the MCP server (`packages/mcp`, #7) and the Access gate
-(`packages/mcp/src/access.ts`, #10) are implemented and tested. The rest is
-tracked as issues on this repo: #9 attachments, #11 `get_message` and
-`get_thread`, #12 write tools, #24 flag reconciliation. See the roadmap table
+sync (#8), the MCP server (`packages/mcp`, #7), the Access gate
+(`packages/mcp/src/access.ts`, #10) and the write tools (#12) are implemented
+and tested. The rest is tracked as issues on this repo: #9 attachments, #11
+`get_message` and `get_thread`, #24 flag reconciliation. See the roadmap table
 in README.md for the full list, and docs/access.md for the Access setup.
 
 Constraints already built into `packages/imap`, because the tickets downstream
@@ -296,3 +302,53 @@ load-bearing control in the whole design rather than hygiene on top of it:
   does, so `scripts/deploy-config.mjs` emits an `access.dev` block into the
   generated config when `ACCESS_AUD` is set — which is the only way to simulate
   a signed-in caller without editing a committed file.
+
+And from the write tools (#12), which are the only way anything in this system
+changes a mailbox:
+
+- **Every refusal lives in `packages/sync`, never in `packages/mcp`.** Policy
+  belongs with the credential: a check in the sync worker is one there is no
+  path around, and a check in the caller is one an injected instruction has to
+  get past a single layer of. The MCP server resolves a message id into uid
+  coordinates and records the attempt; it decides nothing.
+- **`\Deleted` is set in exactly one function.** `moveMessage`, over one uid,
+  immediately after that uid has been copied elsewhere. `flag_message`'s
+  allowlist (`ALLOWED_FLAGS`) is what keeps it out of every other path, and it
+  is an allowlist rather than a denylist because arbitrary keywords are a way to
+  write attacker-chosen text into a mailbox.
+- **A move without a `COPYUID` aborts before the `STORE \Deleted`.** It is the
+  one irreversible path in the ticket: without a COPYUID nothing has confirmed
+  the copy landed, and the next step marks the original for deletion. The
+  `\Deleted` write is then read back before the expunge for the same reason.
+  Each step gates the next, and the order is the whole safety argument.
+- **Audit rows are written by `packages/mcp`, in two statements.** It is the
+  only side that knows the actor and the raw arguments, and the only side that
+  sees an attempt refused before the mailbox is contacted. The intent is
+  recorded as `error` *before* the write and updated after it, so a worker that
+  dies mid-write leaves a truthful record rather than nothing — and so a
+  successful move, which deletes the row `write_log.message_id` points at, does
+  not have to fight a foreign key.
+- **A write returns an outcome; it does not throw across the binding.** A
+  rejected RPC promise arrives as a bare `Error` with the shape of the failure
+  lost, and there would be nothing truthful to put in the audit row. That
+  includes an auth failure, which is refused once rather than retried — a
+  revoked password re-attempted through a tool a model can call in a loop gets
+  an Apple ID locked faster than any cron path ever did.
+- **The service binding is committed in `packages/mcp/wrangler.jsonc`**, unlike
+  `ACCESS_AUD` and the route, because a worker name is not an account-specific
+  value. The cost is that the vitest pool will not boot unless the binding
+  resolves, so `packages/mcp/vitest.config.ts` defines a **stub** auxiliary
+  worker that refuses everything — not the real sync worker, which would drag
+  `@imap-mcp/imap` into that suite. A test that means to exercise a write passes
+  its own fake through `handleRequest(request, { ...env, SYNC_WRITER: fake }, …)`.
+- **`FakeMailbox` in `packages/sync/test/support` still throws from every
+  mutating method, and must keep doing so.** That is what proves an indexing run
+  cannot write, and `consume.test.ts` asserts it by reaching lines that would
+  otherwise throw. Writes are tested against `WritableMailbox`, a separate
+  class, whose `writes` array is one flat ordered list precisely so the
+  copy-then-mark-then-expunge order is assertable.
+- **Flag changes are not written back to D1.** The mailbox is the source of
+  truth and #24 reconciles; until it ships, a flag set through the tool is not
+  visible to `search_messages`. A move is the exception and is not an exception
+  to that rule: it deletes the source row, because after `UID EXPUNGE` the uid
+  addresses nothing and nothing in this system detects an expunge.

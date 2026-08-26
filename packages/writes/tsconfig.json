@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // No `types` at all: this package declares types and imports nothing, so it
+  // needs neither the Workers globals nor Node's. That is the point of it —
+  // see src/index.ts.
+  "include": ["src/**/*.ts"]
+}

@@ -50,6 +50,18 @@ interface SyncEnvVars {
   readonly SYNC_MAX_CHUNKS_PER_RUN?: string;
   /** ISO date. When set, only mail received on or after it is indexed. */
   readonly SYNC_SINCE?: string;
+  /**
+   * The address create_draft writes a draft From (#12). Defaults to IMAP_USER
+   * when that is a full address, and is otherwise omitted — iCloud's LOGIN
+   * takes the local part only, so the credential is often not an address, and a
+   * draft with no From header is legal.
+   */
+  readonly DRAFT_FROM?: string;
+  /**
+   * Where create_draft appends. Only needed when the mailbox advertises no
+   * `\Drafts` special-use AND has no folder called Drafts.
+   */
+  readonly DRAFTS_FOLDER?: string;
 }
 
 // Both interfaces, deliberately. `Env` is what the worker handler is typed

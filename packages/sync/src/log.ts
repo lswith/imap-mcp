@@ -25,13 +25,24 @@ export type Logger = {
  * also a point at which the credential exists.
  */
 export function createLogger(env: Env): Logger {
-  const secrets = passwordForms(env.IMAP_USER ?? "", env.IMAP_PASSWORD ?? "");
-  const scrub = (message: string) => redactSecrets(message, secrets);
+  const scrub = createScrubber(env);
   return {
     info: (message) => console.log(scrub(message)),
     warn: (message) => console.warn(scrub(message)),
     error: (message) => console.error(scrub(message)),
   };
+}
+
+/**
+ * The same scrubbing, for text that is not going to a log line.
+ *
+ * A write outcome (#12) crosses a service binding, lands in write_log, and is
+ * read by a model — three places the credential must not reach either, and none
+ * of them a logger covers.
+ */
+export function createScrubber(env: Env): (message: string) => string {
+  const secrets = passwordForms(env.IMAP_USER ?? "", env.IMAP_PASSWORD ?? "");
+  return (message: string) => redactSecrets(message, secrets);
 }
 
 /**

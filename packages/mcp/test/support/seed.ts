@@ -22,6 +22,10 @@ export type SeedMessage = {
   /** ISO date, converted to the epoch milliseconds the schema stores. */
   date?: string;
   hasAttachments?: boolean;
+  /** The RFC 5322 Message-ID header, which a reply threads under (#12). */
+  rfcMessageId?: string | null;
+  /** The References header's contents, as the schema stores them: a JSON array. */
+  references?: string[];
 };
 
 /** Records a folder, or returns the id it already has. */
@@ -46,8 +50,9 @@ export async function seedMessage(message: SeedMessage = {}): Promise<number> {
 
   const row = await env.DB.prepare(
     `INSERT INTO messages (folder_id, uidvalidity, uid, subject, from_address,
-                           internal_date, body_text, has_attachments)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                           internal_date, body_text, has_attachments,
+                           rfc_message_id, reference_ids)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING id`,
   )
     .bind(
@@ -59,14 +64,26 @@ export async function seedMessage(message: SeedMessage = {}): Promise<number> {
       Date.parse(message.date ?? "2026-03-04T09:12:00Z"),
       message.body ?? null,
       message.hasAttachments ? 1 : 0,
+      message.rfcMessageId ?? null,
+      JSON.stringify(message.references ?? []),
     )
     .first<{ id: number }>();
   if (!row) throw new Error("failed to seed message");
   return row.id;
 }
 
-/** Clears everything between tests; the cascade takes messages and the FTS rows with it. */
+/**
+ * Clears everything between tests; the cascade takes messages and the FTS rows
+ * with it.
+ *
+ * write_log has to be cleared explicitly. Its message_id is ON DELETE SET NULL
+ * rather than CASCADE — an audit row must outlive the message it refers to —
+ * so the cascade above leaves the rows behind rather than removing them.
+ */
 export async function clearIndex(): Promise<void> {
-  await env.DB.prepare("DELETE FROM folders").run();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM write_log"),
+    env.DB.prepare("DELETE FROM folders"),
+  ]);
   nextUid = 1;
 }

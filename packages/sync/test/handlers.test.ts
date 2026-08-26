@@ -1,14 +1,23 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from "cloudflare:test";
 import { ImapAuthError, ImapProtocolError, type Mailbox } from "@imap-mcp/imap";
+import type { DraftRequest, FlagRequest, MoveRequest } from "@imap-mcp/writes";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SyncConfigError } from "../src/config";
-import worker, { handleQueue, handleScheduled } from "../src/index";
+import worker, {
+  handleCreateDraft,
+  handleFlagMessage,
+  handleMoveMessage,
+  handleQueue,
+  handleScheduled,
+  WriteEntrypoint,
+} from "../src/index";
 import { describeError } from "../src/log";
 import { CHUNK_QUEUE, DEAD_LETTER_QUEUE, type SyncChunk } from "../src/queue";
 import { FakeMailbox, fakeMessage } from "./support/fake-mailbox";
 import { FakeQueue } from "./support/fake-queue";
+import { WritableMailbox } from "./support/writable-mailbox";
 
-// The two entry points, and what each one does about failure. Kept apart from
+// The three entry points, and what each one does about failure. Kept apart from
 // enumerate/consume for the reason #5 kept handleScheduled apart from runSync:
 // the decisions worth testing here are abort-or-retry and what gets logged.
 
@@ -19,6 +28,33 @@ function controller(): ScheduledController {
 
 function syncEnv(overrides: Record<string, unknown> = {}): Env {
   return { ...env, SYNC_QUEUE: new FakeQueue(), ...overrides } as unknown as Env;
+}
+
+/** The uid WritableMailbox holds in Archive by default. */
+const WRITE_TARGET = { messageId: 1, folder: "Archive", uidValidity: 100, uid: 12 };
+
+function flagRequest(): FlagRequest {
+  return { ...WRITE_TARGET, add: ["Seen"] };
+}
+
+function moveRequest(messageId = 1): MoveRequest {
+  return { ...WRITE_TARGET, messageId, destination: "Saved" };
+}
+
+function draftRequest(): DraftRequest {
+  return { to: ["bob@example.invalid"], body: "hi" };
+}
+
+/** A row for the uid a move deletes, so the delete has something to remove. */
+async function seedWritableMessage(): Promise<number> {
+  const id = await seedFolder();
+  const row = await env.DB.prepare(
+    `INSERT INTO messages (folder_id, uidvalidity, uid, subject, internal_date)
+     VALUES (?, 100, 12, 'Quarterly invoice', 0) RETURNING id`,
+  )
+    .bind(id)
+    .first<{ id: number }>();
+  return row!.id;
 }
 
 function chunk(overrides: Partial<SyncChunk> = {}): SyncChunk {
@@ -301,6 +337,107 @@ describe("describeError", () => {
   });
 });
 
+describe("the write entry point", () => {
+  it("performs a flag write over one connection, and closes it", async () => {
+    const mailbox = new WritableMailbox();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const outcome = await handleFlagMessage(syncEnv(), flagRequest(), {
+      connect: async () => mailbox,
+    });
+
+    log.mockRestore();
+    expect(outcome).toMatchObject({ ok: true });
+    expect(mailbox.writes).toEqual(["setFlags 12 add Seen"]);
+    expect(mailbox.closed).toBe(true);
+  });
+
+  it("moves and drafts through the same path", async () => {
+    const mailbox = new WritableMailbox();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const id = await seedWritableMessage();
+
+    const moved = await handleMoveMessage(syncEnv(), moveRequest(id), {
+      connect: async () => mailbox,
+    });
+    const drafted = await handleCreateDraft(syncEnv(), draftRequest(), {
+      connect: async () => mailbox,
+    });
+
+    log.mockRestore();
+    expect(moved).toMatchObject({ ok: true });
+    expect(drafted).toMatchObject({ ok: true });
+  });
+
+  it("reports a missing setting rather than throwing across the binding", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const connect = vi.fn();
+
+    const outcome = await handleFlagMessage(syncEnv({ IMAP_USER: undefined }), flagRequest(), {
+      connect,
+    });
+
+    error.mockRestore();
+    // A thrown SyncConfigError would reach the MCP server as a bare Error with
+    // the shape of the failure lost, and there would be nothing truthful to put
+    // in the audit row.
+    expect(outcome).toMatchObject({ ok: false });
+    expect(outcome.ok ? "" : outcome.reason).toContain("IMAP_USER");
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("refuses an authentication failure without retrying it", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const connect = vi.fn(async (): Promise<Mailbox> => {
+      throw new ImapAuthError("NO [AUTHENTICATIONFAILED]");
+    });
+
+    const outcome = await handleFlagMessage(syncEnv(), flagRequest(), { connect });
+
+    error.mockRestore();
+    // Once. A revoked app-specific password re-attempted is how an Apple ID
+    // gets locked, and a tool a model can call in a loop gets there faster than
+    // any cron ever did.
+    expect(connect).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({ ok: false, reason: expect.stringContaining("credentials") });
+  });
+
+  it("reports an ordinary protocol failure as a refusal", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const outcome = await handleFlagMessage(syncEnv(), flagRequest(), {
+      connect: async () => {
+        throw new ImapProtocolError("connection reset");
+      },
+    });
+
+    error.mockRestore();
+    expect(outcome).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("connection reset"),
+    });
+  });
+
+  it("is reachable through the RPC entrypoint, and offers nothing else", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const entrypoint = new WriteEntrypoint(
+      createExecutionContext(),
+      syncEnv({ IMAP_USER: undefined }),
+    );
+
+    // The env is deliberately unconfigured: this asserts the class is wired to
+    // the handlers, which every test above covers properly. What it also
+    // asserts is the surface — three methods, and no fetch for anything that is
+    // not a service binding to reach.
+    await expect(entrypoint.flagMessage(flagRequest())).resolves.toMatchObject({ ok: false });
+    await expect(entrypoint.moveMessage(moveRequest())).resolves.toMatchObject({ ok: false });
+    await expect(entrypoint.createDraft(draftRequest())).resolves.toMatchObject({ ok: false });
+
+    error.mockRestore();
+    expect("fetch" in entrypoint).toBe(false);
+  });
+});
+
 describe("the credential", () => {
   it("never reaches a log line, including error paths", async () => {
     // The app-specific password grants full mailbox access including SMTP
@@ -338,6 +475,13 @@ describe("the credential", () => {
     await handleQueue(batchOf([chunk()]), syncEnv(), createExecutionContext(), {
       connect: leaky,
     }).catch(() => {});
+
+    // And on the write path (#12), where the failure is also handed back to a
+    // model rather than only logged — so the reason is checked as well as the
+    // log lines.
+    const refused = await handleFlagMessage(syncEnv(), flagRequest(), { connect: leaky });
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? "" : refused.reason).not.toContain(password);
 
     // And the whole config object, in case a future log line reaches for it.
     const { createLogger } = await import("../src/log");
