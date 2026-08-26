@@ -302,3 +302,21 @@ export async function recordSyncWatermark(
 export async function resetSyncWatermark(db: D1Database, folderId: number): Promise<void> {
   await db.prepare("UPDATE folders SET last_synced_uid = 0 WHERE id = ?").bind(folderId).run();
 }
+
+/**
+ * Forgets a message, after it has been moved somewhere else (#12).
+ *
+ * Not write-through of the message's new home: it is removal of a row that is
+ * now known to be wrong. A move ends in `UID EXPUNGE`, so the uid this row
+ * carries addresses nothing on the server, and nothing else in this system will
+ * ever notice — incremental sync (#8) detects arrival, #24 detects flag
+ * changes, and neither detects an expunge. Left in place the row would advertise
+ * a message that no fetch can reach, for good.
+ *
+ * The audit row is unaffected by design: write_log.message_id is ON DELETE SET
+ * NULL and its folder/uid columns are denormalised so the row stays
+ * self-describing once it is.
+ */
+export async function deleteMessage(db: D1Database, id: number): Promise<void> {
+  await db.prepare("DELETE FROM messages WHERE id = ?").bind(id).run();
+}

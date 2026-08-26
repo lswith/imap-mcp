@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) attachments ([#9](https://github.com/lswith/imap-mcp/issues/9)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)), the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)) and the retrieval tools ([#11](https://github.com/lswith/imap-mcp/issues/11)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 and R2 through a queue, and the MCP server serves `search_messages`, `get_message` and `get_thread` over that index to callers Cloudflare Access has authenticated — bodies one message at a time, by id. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) attachments ([#9](https://github.com/lswith/imap-mcp/issues/9)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)), the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)), the retrieval tools ([#11](https://github.com/lswith/imap-mcp/issues/11)) and the write tools ([#12](https://github.com/lswith/imap-mcp/issues/12)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 and R2 through a queue, and the MCP server serves `search_messages`, `get_message` and `get_thread` over that index to callers Cloudflare Access has authenticated — bodies one message at a time, by id — plus three write tools it proxies back to the sync worker. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -35,7 +35,7 @@ Two workers, and the split between them is the security design rather than a pac
 - **`packages/sync`** (`imap-mcp-sync`) is the only part of the system that speaks IMAP. It holds the app-specific password — which on iCloud grants full mailbox access *including SMTP send* — so that credential exists in exactly one place.
 - **`packages/mcp`** (`imap-mcp-server`) is a stateless reader. It queries the index, never the mailbox, and proxies the few write operations back to the sync worker over a service binding rather than opening a connection of its own.
 
-A third package, **`packages/imap`** (`@imap-mcp/imap`), is a library rather than a worker: the internal mailbox interface, and the only place the IMAP client library is imported. Only `packages/sync` depends on it.
+Two library packages sit under them, neither of which is a worker. **`packages/imap`** (`@imap-mcp/imap`) is the internal mailbox interface and the only place the IMAP client library is imported; only `packages/sync` depends on it. **`packages/writes`** (`@imap-mcp/writes`) is the write contract, and imports nothing at all — it exists so the two workers can agree on the shape of a write without the one that must never see a mailbox credential depending on the one that holds it.
 
 ## Quickstart
 
@@ -95,6 +95,29 @@ Missing configuration fails closed: with `ACCESS_AUD` unset the worker answers `
 [`docs/access.md`](./docs/access.md) is the setup guide, and [`scripts/setup-access.sh`](./scripts/setup-access.sh) walks it interactively. Note that the MCP worker is not deployed on its own: `imap-mcp-sync` goes first, because it provisions the D1 database both workers share — see [First deploy](#first-deploy). A full deploy-from-scratch guide — secrets, bindings, migrations and the backfill — is [#13](https://github.com/lswith/imap-mcp/issues/13); the Access half is written.
 
 **No committed file is edited to deploy.** `pnpm run deploy` runs [`scripts/deploy-config.mjs`](./scripts/deploy-config.mjs) first, which merges your `.env` into a copy of the committed `wrangler.jsonc` and writes it under the gitignored `.wrangler/`, using wrangler's [redirected configuration](https://developers.cloudflare.com/workers/wrangler/configuration/). The audience tag, the route and the `database_id` wrangler writes back therefore all stay out of git — "nothing deployment-specific is committed" becomes a mechanism rather than a promise, and no private fork is needed to run this against your own account. With no `.env` the script no-ops and wrangler reads the committed config, exactly as a fresh clone does.
+
+## What the MCP server serves
+
+`search_messages` reads the index. The other three write to the mailbox, and every one of them goes over a service binding to the sync worker: this worker opens no IMAP connection and holds no credential, which is what keeps the app-specific password in one place.
+
+| | |
+| --- | --- |
+| `search_messages` | keyword search over the index. Snippets and ids; never a body |
+| `flag_message` | set or clear `\Seen`, `\Flagged`, `\Answered` |
+| `move_message` | move one message to another folder |
+| `create_draft` | save a draft to Drafts, optionally threaded as a reply |
+
+**There is no send and no delete, and that is structural rather than a policy.** This system contains no SMTP client at all. `\Deleted` is not a flag `flag_message` will set — it is written in exactly one function, over exactly one uid, immediately after that uid has been copied somewhere else, and only once the server has confirmed the copy. Everything these tools can do is reversible: flags flip back, a move can be moved back, and a draft is a file you delete.
+
+Three narrower limits do the rest of the work:
+
+- **Trash and Junk are refused as move destinations**, by name *and* by special-use attribute — iCloud does not reliably advertise `\Trash`, so a check that trusted attributes alone would pass a folder plainly called Trash. Every other folder is allowed, so the worst a smuggled instruction achieves is misfiling something you can find again.
+- **Every write is recorded in `write_log`**, with the Access identity of the caller, the arguments as the model supplied them, and the outcome — including writes that failed, and writes refused before the mailbox was contacted at all. The row is written *before* the attempt and updated after it, so a worker that dies mid-write leaves a record saying so rather than nothing. This is the control that actually matters: it turns hidden mischief into a list you can look at.
+- **Every write is checked against `UIDVALIDITY` before it happens.** A folder that has been renumbered since the search that produced the id has every uid pointing at a different message; search merely hides those rows, but a write has to refuse them.
+
+iCloud offers no `MOVE` — it is absent from `CAPABILITY`, and the session is `IMAP4rev1` — so `move_message` is `COPY`, then `STORE \Deleted`, then **`UID EXPUNGE`**. Each step gates the next, and the last one is not negotiable: a bare `EXPUNGE` sweeps *every* `\Deleted` message in the folder, including ones another mail client marked and has not yet expunged. The internal `Mailbox` interface has no bare-`EXPUNGE` path at all, so there is nothing to remember.
+
+A move is the one write that changes the index directly: the source row is deleted, because after the expunge its uid addresses nothing and neither incremental sync nor flag reconciliation detects an expunge. Flag changes are not written back — the mailbox is the source of truth and [#24](https://github.com/lswith/imap-mcp/issues/24) reconciles them, so until it ships a flag set through the tool is not visible to `search_messages`.
 
 ## Storage
 
@@ -386,7 +409,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction — *done* |
 | [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth — *done* |
 | [#11](https://github.com/lswith/imap-mcp/issues/11) | `get_message` and `get_thread` — *done* |
-| [#12](https://github.com/lswith/imap-mcp/issues/12) | Write tools over a service binding, with an audit log |
+| [#12](https://github.com/lswith/imap-mcp/issues/12) | Write tools over a service binding, with an audit log — *done* |
 | [#13](https://github.com/lswith/imap-mcp/issues/13) | Full backfill and setup guide |
 | [#24](https://github.com/lswith/imap-mcp/issues/24) | Flag reconciliation over CONDSTORE |
 

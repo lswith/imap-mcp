@@ -2,7 +2,7 @@
  * MCP server — a stateless reader over the index the sync worker builds.
  *
  * It holds no IMAP connection and no mailbox credential: reads come from D1,
- * and writes will be proxied to the sync worker over a service binding (#12).
+ * and writes are proxied to the sync worker over a service binding (#12).
  * Keeping it that way is what confines the app-specific password to one worker.
  *
  * wrangler.jsonc still declares no route and disables workers_dev and
@@ -100,7 +100,10 @@ export async function handleRequest(
   // whichever `env` happened to arrive first. Constructing it here is a
   // couple of cheap objects, and it is the honest shape of a server that
   // holds nothing between requests.
-  return createMcpHandler(() => createServer(env)).fetch(request);
+  // The Access context rides through to the write tools (#12), which need an
+  // actor for the audit row. Handed over whole rather than resolved here:
+  // `getIdentity()` is a call, and a search has no business paying for one.
+  return createMcpHandler(() => createServer(env, access.access)).fetch(request);
 }
 
 export default {

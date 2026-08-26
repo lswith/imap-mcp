@@ -137,8 +137,18 @@ export async function seedAttachment(
     .run();
 }
 
-/** Clears everything between tests; the cascade takes messages and the FTS rows with it. */
+/**
+ * Clears everything between tests; the cascade takes messages and the FTS rows
+ * with it.
+ *
+ * `write_log` has to be deleted explicitly: its message reference is ON DELETE
+ * SET NULL rather than CASCADE, deliberately, so that an audit row outlives the
+ * message it describes (#12). Dropping folders therefore leaves it behind.
+ */
 export async function clearIndex(): Promise<void> {
-  await env.DB.prepare("DELETE FROM folders").run();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM write_log"),
+    env.DB.prepare("DELETE FROM folders"),
+  ]);
   nextUid = 1;
 }

@@ -1,10 +1,12 @@
 import { env, SELF } from "cloudflare:test";
+import type { WriteService } from "@imap-mcp/writes";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handleRequest } from "../src/index";
 import { authenticated } from "./support/access";
 import { clearIndex, seedMessage } from "./support/seed";
+import { envWithWriter, FakeWriter } from "./support/writer";
 
 const ENDPOINT = new URL("https://imap-mcp.invalid/mcp");
 
@@ -15,7 +17,7 @@ const ENDPOINT = new URL("https://imap-mcp.invalid/mcp");
  * this an end-to-end test: the handshake, the tool schema and the content
  * blocks are all the ones a client would actually negotiate.
  */
-async function connect(): Promise<Client> {
+async function connect(writer: WriteService = new FakeWriter()): Promise<Client> {
   const client = new Client({ name: "test", version: "0.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(ENDPOINT, {
@@ -26,7 +28,13 @@ async function connect(): Promise<Client> {
       // `ctx.access`, so this is the only way in. Everything below the entry
       // point is still the real thing: real MCP protocol, real handler, real D1.
       fetch: (input, init) =>
-        handleRequest(new Request(input as RequestInfo, init as RequestInit), env, authenticated()),
+        handleRequest(
+          new Request(input as RequestInfo, init as RequestInit),
+          // The service binding is stubbed to refuse in vitest.config.ts, so a
+          // write test that means to reach the sync worker has to say so.
+          envWithWriter(env, writer),
+          authenticated(),
+        ),
     }),
   );
   return client;
@@ -260,5 +268,100 @@ describe("mcp server", () => {
       body: "{}",
     });
     expect(client.status).not.toBe(403);
+  });
+});
+
+describe("the write tools", () => {
+  it("lists all three, with the schema each ticket promised", async () => {
+    const { tools } = await (await connect()).listTools();
+    const named = (name: string) => tools.find((tool) => tool.name === name);
+
+    expect(Object.keys(named("flag_message")?.inputSchema.properties ?? {}).sort()).toEqual([
+      "add",
+      "messageId",
+      "remove",
+    ]);
+    expect(named("flag_message")?.inputSchema.required).toEqual(["messageId"]);
+
+    expect(Object.keys(named("move_message")?.inputSchema.properties ?? {}).sort()).toEqual([
+      "destination",
+      "messageId",
+    ]);
+    expect(named("move_message")?.inputSchema.required?.sort()).toEqual([
+      "destination",
+      "messageId",
+    ]);
+
+    expect(Object.keys(named("create_draft")?.inputSchema.properties ?? {}).sort()).toEqual([
+      "body",
+      "cc",
+      "inReplyTo",
+      "subject",
+      "to",
+    ]);
+    expect(named("create_draft")?.inputSchema.required).toEqual(["body"]);
+  });
+
+  it("offers no tool that can send or delete", async () => {
+    const { tools } = await (await connect()).listTools();
+
+    // The whole list, so a tool that could send or delete cannot be added
+    // without this line being edited to admit it.
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "create_draft",
+      "flag_message",
+      "get_message",
+      "get_thread",
+      "move_message",
+      "search_messages",
+    ]);
+    for (const tool of tools) {
+      expect(tool.annotations?.destructiveHint ?? false).toBe(false);
+    }
+  });
+
+  it("flags a message and frames the answer", async () => {
+    const id = await seedMessage({ folder: "Archive", uid: 9931 });
+    const writer = new FakeWriter({ ok: true, detail: "uid 9931 in Archive now carries Flagged" });
+
+    const result = (await (
+      await connect(writer)
+    ).callTool({
+      name: "flag_message",
+      arguments: { messageId: id, add: ["Flagged"] },
+    })) as CallToolResult;
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toMatch(/<mailbox-write nonce="[0-9a-f]+">/);
+    expect(textOf(result)).toContain("uid 9931 in Archive now carries Flagged");
+  });
+
+  it("reports a refusal as a tool error rather than a failed call", async () => {
+    const id = await seedMessage();
+    const writer = new FakeWriter({ ok: false, reason: "Trash is not an allowed destination." });
+
+    const result = (await (
+      await connect(writer)
+    ).callTool({
+      name: "move_message",
+      arguments: { messageId: id, destination: "Trash" },
+    })) as CallToolResult;
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Trash is not an allowed destination.");
+  });
+
+  it("records what it was asked to do, whoever asked", async () => {
+    const id = await seedMessage();
+
+    await (await connect()).callTool({
+      name: "create_draft",
+      arguments: { to: ["bob@example.invalid"], body: "hi", inReplyTo: id },
+    });
+
+    const row = await env.DB.prepare(
+      "SELECT tool, actor, outcome FROM write_log ORDER BY id DESC",
+    ).first<{ tool: string; actor: string; outcome: string }>();
+    expect(row).toMatchObject({ tool: "create_draft", actor: "luke@example.com" });
   });
 });

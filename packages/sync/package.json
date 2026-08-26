@@ -14,7 +14,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@imap-mcp/imap": "workspace:*"
+    "@imap-mcp/imap": "workspace:*",
+    "@imap-mcp/writes": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

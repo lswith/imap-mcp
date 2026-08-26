@@ -27,6 +27,36 @@ export default defineConfig({
           // deploy does. src/env.d.ts is where its shape is declared.
           ACCESS_AUD: TEST_AUD,
         },
+        // The service binding wrangler.jsonc declares has to resolve or the
+        // pool will not boot at all. This is a stub, not imap-mcp-sync: running
+        // the real thing here would pull @imap-mcp/imap into this suite, and
+        // this package not depending on it is the security design rather than a
+        // packaging preference.
+        //
+        // It refuses everything, which is the honest default — a test that
+        // means to exercise a write passes its own fake through
+        // `handleRequest(request, { ...env, SYNC_WRITER: fake }, …)`, so a
+        // forgotten one fails loudly here instead of quietly succeeding.
+        workers: [
+          {
+            name: "imap-mcp-sync",
+            modules: true,
+            compatibilityDate: "2026-08-15",
+            script: `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              const refuse = async () => ({
+                ok: false,
+                reason: "no sync worker is running in this test",
+              });
+              export class WriteEntrypoint extends WorkerEntrypoint {
+                flagMessage = refuse;
+                moveMessage = refuse;
+                createDraft = refuse;
+              }
+              export default { fetch: () => new Response(null, { status: 404 }) };
+            `,
+          },
+        ],
       },
     }),
   ],
@@ -42,13 +72,13 @@ export default defineConfig({
       provider: "istanbul",
       reporter: ["text", "text-summary"],
       include: ["src/**/*.ts"],
-      // The ratchet, set where search_messages landed (#7). The suite measures
+      // The ratchet, last raised where the write tools (#12) landed. The suite measures
       // 100% on every counter; these sit a few points under so an ordinary
       // defensive branch does not fail a build on the day it is written.
       // Raise them as coverage rises, and never lower them to make a red build
       // pass — the number is only worth anything as a floor that has never
       // moved down.
-      thresholds: { statements: 98, branches: 95, functions: 95, lines: 98 },
+      thresholds: { statements: 99, branches: 95, functions: 99, lines: 99 },
     },
   },
 });

@@ -6,22 +6,38 @@
  * writes here over a service binding rather than holding a credential of its
  * own.
  *
- * Two entry points, which between them are the fan-out (#6):
+ * Three entry points. The first two are the fan-out (#6):
  *
  *   scheduled  enumerate uids and post ~100-uid ranges to a queue
  *   queue      take one range, fetch it over one connection, upsert it
+ *   RPC        perform one write the MCP server asked for (#12)
  *
  * Incremental sync — reading the watermark instead of re-deriving it — is #8.
+ *
+ * The third has no route and no fetch handler: WriteEntrypoint is reachable
+ * only over a service binding, from a worker on this same account that declares
+ * one. That is what lets the MCP server offer write tools while holding no
+ * mailbox credential — and why `workers_dev` and `preview_urls` staying false
+ * still means this worker is not on the internet at all.
  */
 
-import { ImapAuthError } from "@imap-mcp/imap";
-import { readSyncConfig, SyncConfigError } from "./config";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { ImapAuthError, type Mailbox } from "@imap-mcp/imap";
+import type {
+  DraftRequest,
+  FlagRequest,
+  MoveRequest,
+  WriteOutcome,
+  WriteService,
+} from "@imap-mcp/writes";
+import { readSyncConfig, type SyncConfig, SyncConfigError } from "./config";
 import { type ChunkOutcome, consumeChunk } from "./consume";
 import { runEnumerate, summariseEnumeration } from "./enumerate";
-import { createLogger, describeError, type Logger } from "./log";
+import { createLogger, createScrubber, describeError, type Logger } from "./log";
 import { DEAD_LETTER_QUEUE, describeChunk, parseChunk, type SyncChunk } from "./queue";
 import type { SyncDeps } from "./session";
 import { withMailbox } from "./session";
+import { createDraft, flagMessage, moveMessage } from "./writes";
 
 /**
  * What a cron tick does, and what it does about failure.
@@ -156,6 +172,109 @@ function reportDeadLetters(batch: MessageBatch<unknown>, log: Logger): void {
     } catch (error) {
       log.error(`dead-lettered an unusable queue message: ${describeError(error)}`);
     }
+  }
+}
+
+/**
+ * One write, over one connection, reporting rather than throwing.
+ *
+ * Expected failures come back as outcomes because these calls arrive over a
+ * service binding: a rejected RPC promise reaches the caller as a bare Error
+ * with the shape of the failure lost, and the caller's job is to write an audit
+ * row saying what happened — which needs a sentence, not a stack.
+ *
+ * An authentication failure is one of those. It does not throw here for the
+ * same reason the queue path acks rather than retries: a revoked app-specific
+ * password re-attempted is how an Apple ID gets locked, and a tool a model can
+ * call in a loop is a faster way to do it than any cron.
+ */
+async function performWrite(
+  env: Env,
+  deps: SyncDeps,
+  tool: string,
+  body: (context: { mailbox: Mailbox; config: SyncConfig; log: Logger }) => Promise<WriteOutcome>,
+): Promise<WriteOutcome> {
+  const log = deps.log ?? createLogger(env);
+  const scrub = createScrubber(env);
+
+  let config: SyncConfig;
+  try {
+    config = readSyncConfig(env);
+  } catch (error) {
+    log.error(`${tool}: refusing, ${describeError(error)}`);
+    return {
+      ok: false,
+      reason: scrub(`This server is not configured for writes: ${describeError(error)}`),
+    };
+  }
+
+  try {
+    const outcome = await withMailbox(config, deps, log, (mailbox) =>
+      body({ mailbox, config, log }),
+    );
+    log.info(`${tool}: ${outcome.ok ? outcome.detail : `refused — ${outcome.reason}`}`);
+    return outcome;
+  } catch (error) {
+    log.error(`${tool} failed: ${describeError(error)}`);
+    if (error instanceof ImapAuthError) {
+      return { ok: false, reason: "The mailbox rejected this server's credentials." };
+    }
+    return { ok: false, reason: scrub(`The mailbox write failed: ${describeError(error)}`) };
+  }
+}
+
+export function handleFlagMessage(
+  env: Env,
+  request: FlagRequest,
+  deps: SyncDeps = {},
+): Promise<WriteOutcome> {
+  return performWrite(env, deps, "flag_message", ({ mailbox, log }) =>
+    flagMessage(mailbox, request, log),
+  );
+}
+
+export function handleMoveMessage(
+  env: Env,
+  request: MoveRequest,
+  deps: SyncDeps = {},
+): Promise<WriteOutcome> {
+  return performWrite(env, deps, "move_message", ({ mailbox, log }) =>
+    moveMessage(env.DB, mailbox, request, log),
+  );
+}
+
+export function handleCreateDraft(
+  env: Env,
+  request: DraftRequest,
+  deps: SyncDeps = {},
+): Promise<WriteOutcome> {
+  return performWrite(env, deps, "create_draft", ({ mailbox, config, log }) =>
+    createDraft(mailbox, request, config, log),
+  );
+}
+
+/**
+ * The whole of what the MCP server may ask this worker to do.
+ *
+ * `implements WriteService` is load-bearing rather than documentation. RPC over
+ * a service binding is structurally typed at the boundary, so a field renamed
+ * on one side compiles cleanly on both and fails only in production; the
+ * contract package exists to make that a red build, and this declaration is
+ * where the sync half of it gets checked.
+ *
+ * There is no fourth method, no `fetch`, and nothing here can send or delete.
+ */
+export class WriteEntrypoint extends WorkerEntrypoint<Env> implements WriteService {
+  flagMessage(request: FlagRequest): Promise<WriteOutcome> {
+    return handleFlagMessage(this.env, request);
+  }
+
+  moveMessage(request: MoveRequest): Promise<WriteOutcome> {
+    return handleMoveMessage(this.env, request);
+  }
+
+  createDraft(request: DraftRequest): Promise<WriteOutcome> {
+    return handleCreateDraft(this.env, request);
   }
 }
 

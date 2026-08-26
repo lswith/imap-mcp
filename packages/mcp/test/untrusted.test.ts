@@ -299,6 +299,20 @@ describe("renderMessage", () => {
     expect(rendered).toContain("(inline)");
   });
 
+  it("renders every recipient and flag in full, not truncated to its position", () => {
+    // flatten takes an optional cap, so a point-free `.map(flatten)` hands it
+    // the array index and silently cuts the first entry to nothing.
+    const rendered = renderMessage(
+      record({
+        toAddresses: ["alice@example.com", "bob@example.com"],
+        flags: ["Seen", "Flagged"],
+      }),
+    );
+
+    expect(rendered).toContain("to: alice@example.com, bob@example.com");
+    expect(rendered).toContain("flags: Seen, Flagged");
+  });
+
   it("renders a cc list, and leaves the line out when there is none", () => {
     expect(renderMessage(record({ ccAddresses: ["carol@example.com"] }))).toContain(
       "cc: carol@example.com",

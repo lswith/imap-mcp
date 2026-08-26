@@ -58,6 +58,23 @@
       // Repo root, shared by both workers -- one schema, two consumers.
       "migrations_dir": "../../migrations"
     }
+  ],
+  // How a write reaches the mailbox (#12).
+  //
+  // This is the whole reason the write tools can exist without this worker
+  // holding a mailbox credential: it names three methods on imap-mcp-sync and
+  // gets nothing else. The sync worker declares no route and no fetch handler,
+  // so WriteEntrypoint is not reachable from the internet at all -- only from a
+  // worker on this same account that declares this binding.
+  //
+  // Committed, unlike ACCESS_AUD and the route, because a worker name is not an
+  // account-specific value. That also means `pnpm run build` checks it.
+  "services": [
+    {
+      "binding": "SYNC_WRITER",
+      "service": "imap-mcp-sync",
+      "entrypoint": "WriteEntrypoint"
+    }
   ]
   //
   // Not committed, and deliberately absent until the tickets that need them:
@@ -72,8 +89,7 @@
   //                  it the worker answers 500 rather than falling open. See
   //                  ../../docs/access.md.
   //   r2_buckets  -- attachment bytes, if a read tool ever serves them (#11)
-  //   services    -- binding to imap-mcp-sync for writes (#12)
   //
   // This worker holds no IMAP credential, by design, and should never be given
-  // one: writes reach the sync worker over a service binding instead.
+  // one: writes reach the sync worker over the service binding above instead.
 }
