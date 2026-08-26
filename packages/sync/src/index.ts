@@ -31,7 +31,7 @@ import type {
   WriteService,
 } from "@imap-mcp/writes";
 import { readSyncConfig, type SyncConfig, SyncConfigError } from "./config";
-import { consumeChunk } from "./consume";
+import { type ChunkOutcome, consumeChunk } from "./consume";
 import { runEnumerate, summariseEnumeration } from "./enumerate";
 import { createLogger, createScrubber, describeError, type Logger } from "./log";
 import { DEAD_LETTER_QUEUE, describeChunk, parseChunk, type SyncChunk } from "./queue";
@@ -114,7 +114,7 @@ export async function handleQueue(
       for (const { message, chunk } of work) {
         try {
           const outcome = await consumeChunk(env, mailbox, chunk, config, log);
-          log.info(`stored ${outcome.stored} of ${describeChunk(chunk)}`);
+          log.info(`stored ${summarise(outcome)} of ${describeChunk(chunk)}`);
           message.ack();
         } catch (error) {
           if (isTerminal(error)) throw error;
@@ -133,10 +133,22 @@ export async function handleQueue(
     batch.ackAll();
   }
 
-  // `ctx` is unused today. It is in the signature because getQueueResult wants
-  // the handler's own ExecutionContext, and because #9 will waitUntil() the R2
-  // writes through it.
+  // `ctx` is unused, and the R2 writes (#9) deliberately do not go through
+  // waitUntil(). Acking a queue message whose puts have not resolved would let
+  // a message row claim attachments whose bytes never arrived — and because gap
+  // detection counts message rows, that range would then never be enqueued
+  // again. The puts are what the invocation is for, so they are awaited. It
+  // stays in the signature because getQueueResult wants the handler's own
+  // ExecutionContext.
   void ctx;
+}
+
+/** What one chunk did, for the invocation timeline. */
+function summarise(outcome: ChunkOutcome): string {
+  const parts = [`${outcome.stored} messages`];
+  if (outcome.attachments > 0) parts.push(`${outcome.attachments} attachments`);
+  if (outcome.oversize > 0) parts.push(`${outcome.oversize} too large to fetch`);
+  return parts.join(", ");
 }
 
 /** Auth and configuration are the two failures a retry cannot fix. */

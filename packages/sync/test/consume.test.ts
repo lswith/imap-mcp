@@ -5,7 +5,14 @@ import { readSyncConfig } from "../src/config";
 import { consumeChunk } from "../src/consume";
 import { createLogger } from "../src/log";
 import type { SyncChunk } from "../src/queue";
-import { FakeMailbox, fakeAttachment, fakeMessage } from "./support/fake-mailbox";
+import {
+  attachmentOf,
+  bytesOfLength,
+  FakeMailbox,
+  fakeAttachment,
+  fakeMessage,
+  firstDifference,
+} from "./support/fake-mailbox";
 
 // The consumer half of #6: one uid range, one connection, upserted into D1.
 // This is the path the tracer (#5) used to be, so the properties it proved —
@@ -70,6 +77,38 @@ async function count(table: string): Promise<number> {
   return row!.n;
 }
 
+type StoredAttachment = {
+  uid: number;
+  partIndex: number;
+  filename: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  isInline: number;
+  r2Key: string | null;
+  extractedText: string | null;
+};
+
+async function storedAttachments(): Promise<StoredAttachment[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT m.uid, a.part_index AS partIndex, a.filename, a.mime_type AS mimeType,
+            a.size_bytes AS sizeBytes, a.is_inline AS isInline, a.r2_key AS r2Key,
+            a.extracted_text AS extractedText
+     FROM attachments a JOIN messages m ON m.id = a.message_id
+     ORDER BY m.uid, a.part_index`,
+  ).all<StoredAttachment>();
+  return results;
+}
+
+async function storedKeys(): Promise<string[]> {
+  const listed = await env.ATTACHMENTS.list();
+  return listed.objects.map((object) => object.key).sort();
+}
+
+/** The fetches that actually pulled bodies, i.e. everything but the size pass. */
+function bodyFetches(mailbox: FakeMailbox) {
+  return mailbox.fetches.filter((fetch) => fetch.includeBody !== false);
+}
+
 function run(mailbox: FakeMailbox, body: SyncChunk, overrides: Partial<Env> = {}) {
   const worker = syncEnv(overrides);
   return consumeChunk(worker, mailbox, body, readSyncConfig(worker), createLogger(worker));
@@ -77,6 +116,8 @@ function run(mailbox: FakeMailbox, body: SyncChunk, overrides: Partial<Env> = {}
 
 beforeEach(async () => {
   await env.DB.prepare("DELETE FROM folders").run();
+  const listed = await env.ATTACHMENTS.list();
+  await env.ATTACHMENTS.delete(listed.objects.map((object) => object.key));
 });
 
 describe("consuming one uid range", () => {
@@ -194,7 +235,10 @@ describe("consuming one uid range", () => {
 
     await run(mailbox, chunk({ folderId: id, uids: [1, 2, 3, 4, 5] }), { SYNC_CHUNK_SIZE: "2" });
 
-    expect(mailbox.fetches.map((fetch) => fetch.uids)).toEqual([[1, 2], [3, 4], [5]]);
+    // One header-only pass over the whole range first — that is what makes the
+    // bound below a decision rather than a hope (#9) — then the body slices.
+    expect(mailbox.fetches[0]).toMatchObject({ uids: [1, 2, 3, 4, 5], includeBody: false });
+    expect(bodyFetches(mailbox).map((fetch) => fetch.uids)).toEqual([[1, 2], [3, 4], [5]]);
     expect(await count("messages")).toBe(5);
   });
 
@@ -290,6 +334,18 @@ describe("consuming one uid range", () => {
     expect(warnings).toContain("could not list folders");
   });
 
+  it("stores nothing when the uids no longer exist on the server", async () => {
+    // Enumeration listed them; by the time the range was consumed another
+    // client had expunged them. Not an error — the range simply has no work.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ messages: [] });
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1, 2] }));
+
+    expect(result).toEqual({ stored: 0, attachments: 0, oversize: 0, stale: false });
+    expect(await count("messages")).toBe(0);
+  });
+
   it("lets a fetch failure out, rather than acking work it did not do", async () => {
     const id = await seedFolder();
     const mailbox = new FakeMailbox({ messages: [fakeMessage(1)] });
@@ -301,5 +357,359 @@ describe("consuming one uid range", () => {
       ImapProtocolError,
     );
     expect(await count("messages")).toBe(0);
+  });
+});
+
+describe("attachments (#9)", () => {
+  it("writes the bytes to R2 and the metadata to D1, linked to the message", async () => {
+    const id = await seedFolder();
+    const pdf = bytesOfLength(4096);
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, {
+          text: "see attached",
+          attachments: [
+            attachmentOf(new TextEncoder().encode("qty,item\n3,widget"), {
+              filename: "order.csv",
+              mimeType: "text/csv",
+            }),
+            attachmentOf(pdf, { filename: "invoice.pdf", mimeType: "application/pdf" }),
+          ],
+        }),
+      ],
+    });
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1] }));
+
+    expect(result).toMatchObject({ stored: 1, attachments: 2, oversize: 0 });
+    expect(await storedAttachments()).toEqual([
+      {
+        uid: 1,
+        partIndex: 0,
+        filename: "order.csv",
+        mimeType: "text/csv",
+        sizeBytes: 17,
+        isInline: 0,
+        r2Key: `att/${id}/100/1/0`,
+        extractedText: "qty,item\n3,widget",
+      },
+      {
+        uid: 1,
+        partIndex: 1,
+        filename: "invoice.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 4096,
+        isInline: 0,
+        r2Key: `att/${id}/100/1/1`,
+        // Stored and retrievable, explicitly not indexed.
+        extractedText: null,
+      },
+    ]);
+
+    const object = await env.ATTACHMENTS.get(`att/${id}/100/1/1`);
+    expect(new Uint8Array(await object!.arrayBuffer())).toEqual(pdf);
+    expect((await storedMessages())[0].hasAttachments).toBe(1);
+  });
+
+  it("indexes extracted text into its own FTS table", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, {
+          attachments: [
+            attachmentOf(new TextEncoder().encode("the aardvark manifest"), {
+              filename: "notes.txt",
+            }),
+          ],
+        }),
+      ],
+    });
+
+    await run(mailbox, chunk({ folderId: id, uids: [1] }));
+
+    const hit = await env.DB.prepare(
+      "SELECT rowid AS id FROM attachments_fts WHERE attachments_fts MATCH ?",
+    )
+      .bind("aardvark")
+      .first<{ id: number }>();
+    expect(hit).not.toBeNull();
+
+    // The filename is indexed too — for a PDF it is the only searchable thing.
+    const byName = await env.DB.prepare(
+      "SELECT rowid AS id FROM attachments_fts WHERE attachments_fts MATCH ?",
+    )
+      .bind("notes")
+      .first<{ id: number }>();
+    expect(byName!.id).toBe(hit!.id);
+  });
+
+  it("redelivering the same range duplicates neither rows nor objects", async () => {
+    // The acceptance criterion. R2 keys are derived from the message and the
+    // part, and attachment rows are replaced rather than appended.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, {
+          attachments: [
+            attachmentOf(new TextEncoder().encode("one"), { filename: "a.txt" }),
+            attachmentOf(new TextEncoder().encode("two"), { filename: "b.txt" }),
+          ],
+        }),
+      ],
+    });
+    const body = chunk({ folderId: id, uids: [1] });
+
+    await run(mailbox, body);
+    await run(mailbox, body);
+
+    expect(await count("attachments")).toBe(2);
+    expect(await storedKeys()).toEqual([`att/${id}/100/1/0`, `att/${id}/100/1/1`]);
+  });
+
+  it("drops attachment rows a re-sync no longer sees", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, {
+          attachments: [
+            fakeAttachment({ filename: "a.txt" }),
+            fakeAttachment({ filename: "b.txt" }),
+          ],
+        }),
+      ],
+    });
+    const body = chunk({ folderId: id, uids: [1] });
+    await run(mailbox, body);
+    expect(await count("attachments")).toBe(2);
+
+    mailbox.setMessages([fakeMessage(1, { attachments: [fakeAttachment({ filename: "a.txt" })] })]);
+    await run(mailbox, body);
+
+    expect(await storedAttachments()).toMatchObject([{ partIndex: 0, filename: "a.txt" }]);
+  });
+
+  it("round-trips a message carrying several attachments, one of a few MB", async () => {
+    const id = await seedFolder();
+    const big = bytesOfLength(3 * 1024 * 1024);
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, {
+          size: 4 * 1024 * 1024,
+          text: "the deck is attached",
+          attachments: [
+            attachmentOf(new TextEncoder().encode("agenda"), { filename: "agenda.md" }),
+            attachmentOf(big, { filename: "deck.pdf", mimeType: "application/pdf" }),
+            attachmentOf(bytesOfLength(32), {
+              filename: "logo.png",
+              mimeType: "image/png",
+              isInline: true,
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1] }));
+
+    expect(result).toMatchObject({ stored: 1, attachments: 3, oversize: 0 });
+    const object = await env.ATTACHMENTS.get(`att/${id}/100/1/1`);
+    const stored = new Uint8Array(await object!.arrayBuffer());
+    expect(stored.length).toBe(big.length);
+    expect(firstDifference(stored, big)).toBe(-1);
+    expect(await storedAttachments()).toMatchObject([
+      { partIndex: 0, extractedText: "agenda" },
+      { partIndex: 1, sizeBytes: big.length, extractedText: null },
+      { partIndex: 2, isInline: 1 },
+    ]);
+  });
+
+  it("an attachment that will not decode does not fail the message", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, {
+          text: "body survives",
+          attachments: [fakeAttachment({ filename: "broken.txt", contentBase64: "!! not b64 !!" })],
+        }),
+      ],
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1] }));
+
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(result).toMatchObject({ stored: 1 });
+    expect(warnings).toContain("broken.txt");
+    expect((await storedMessages())[0].bodyText).toBe("body survives");
+    expect(await storedAttachments()).toMatchObject([{ filename: "broken.txt", r2Key: null }]);
+  });
+
+  it("splits a big write across batches without losing a message's own rows", async () => {
+    // A message's upsert, the DELETE that clears its old attachment rows and
+    // the INSERTs that replace them are one transaction. A message carrying
+    // more attachments than the statement budget therefore gets a batch to
+    // itself rather than being cut in half.
+    const id = await seedFolder();
+    const many = Array.from({ length: 60 }, (_, index) =>
+      attachmentOf(new TextEncoder().encode(`part ${index}`), { filename: `p${index}.txt` }),
+    );
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, { attachments: many }),
+        fakeMessage(2, { attachments: [fakeAttachment()] }),
+      ],
+    });
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1, 2] }));
+
+    expect(result).toMatchObject({ stored: 2, attachments: 61 });
+    expect(await count("attachments")).toBe(61);
+    const last = await env.DB.prepare(
+      "SELECT extracted_text AS text FROM attachments WHERE r2_key = ?",
+    )
+      .bind(`att/${id}/100/1/59`)
+      .first<{ text: string }>();
+    expect(last!.text).toBe("part 59");
+  });
+
+  it("writes no message row when R2 refuses, so the gap is re-enqueued", async () => {
+    // Gap detection counts `messages` rows. If a row could land while its bytes
+    // did not, the bucket would read as complete and the range would never come
+    // back. R2 first is what makes that impossible.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [fakeMessage(1, { attachments: [fakeAttachment()] })],
+    });
+    const worker = syncEnv({
+      ATTACHMENTS: { put: () => Promise.reject(new Error("R2 unavailable")) },
+    } as unknown as Partial<Env>);
+
+    await expect(
+      consumeChunk(
+        worker,
+        mailbox,
+        chunk({ folderId: id, uids: [1] }),
+        readSyncConfig(worker),
+        createLogger(worker),
+      ),
+    ).rejects.toThrow("R2 unavailable");
+    expect(await count("messages")).toBe(0);
+  });
+});
+
+describe("messages too large to fetch (#9)", () => {
+  it("records an oversize message from its headers and never fetches its body", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, { size: 1024, text: "small" }),
+        fakeMessage(2, {
+          size: 40 * 1024 * 1024,
+          subject: "Ten years of photos",
+          text: "this must never be fetched",
+          attachments: [fakeAttachment()],
+        }),
+      ],
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1, 2] }));
+
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(result).toMatchObject({ stored: 2, oversize: 1, attachments: 0 });
+    expect(warnings).toContain("uid 2");
+
+    // Every body fetch asked only for uid 1.
+    expect(bodyFetches(mailbox).map((fetch) => fetch.uids)).toEqual([[1]]);
+
+    const rows = await env.DB.prepare(
+      "SELECT uid, subject, body_text AS bodyText, oversize, size_bytes AS sizeBytes FROM messages ORDER BY uid",
+    ).all<{
+      uid: number;
+      subject: string;
+      bodyText: string | null;
+      oversize: number;
+      sizeBytes: number;
+    }>();
+    expect(rows.results).toEqual([
+      { uid: 1, subject: "Message 1", bodyText: "small", oversize: 0, sizeBytes: 1024 },
+      {
+        uid: 2,
+        subject: "Ten years of photos",
+        bodyText: null,
+        oversize: 1,
+        sizeBytes: 40 * 1024 * 1024,
+      },
+    ]);
+    expect(await storedKeys()).toEqual([]);
+  });
+
+  it("caps a body fetch by bytes, not only by message count", async () => {
+    // Ten small messages still travel together; two 5 MB ones cannot.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, { size: 5 * 1024 * 1024 }),
+        fakeMessage(2, { size: 5 * 1024 * 1024 }),
+        fakeMessage(3, { size: 512 }),
+      ],
+    });
+
+    await run(mailbox, chunk({ folderId: id, uids: [1, 2, 3] }));
+
+    expect(bodyFetches(mailbox).map((fetch) => fetch.uids)).toEqual([[1], [2, 3]]);
+    // And the server is told the limit too, so a lying RFC822.SIZE still cannot
+    // hand the isolate more than it budgeted for.
+    expect(bodyFetches(mailbox)[0]).toMatchObject({ byteLimit: 8 * 1024 * 1024 });
+  });
+
+  it("demotes a message that arrives larger than its reported size", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ messages: [fakeMessage(1, { size: 1024 })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The size pass sees 1024; the body fetch answers with a message that says
+    // 40 MB. Its body was truncated by byteLimit, so parsing it would index
+    // damaged MIME as though it were the message.
+    vi.spyOn(mailbox, "fetchMessages").mockImplementation(async (options) => {
+      const message = fakeMessage(1, {
+        size: options.includeBody === false ? 1024 : 40 * 1024 * 1024,
+      });
+      return [message];
+    });
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1] }));
+
+    warn.mockRestore();
+    expect(result).toMatchObject({ stored: 1, oversize: 1 });
+    const row = await env.DB.prepare("SELECT oversize FROM messages").first<{ oversize: number }>();
+    expect(row!.oversize).toBe(1);
+  });
+
+  it("honours a configured ceiling", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ messages: [fakeMessage(1, { size: 4096, text: "hi" })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await run(mailbox, chunk({ folderId: id, uids: [1] }), {
+      SYNC_MAX_FETCH_BYTES: "2048",
+    });
+
+    warn.mockRestore();
+    expect(result).toMatchObject({ oversize: 1 });
+    expect(bodyFetches(mailbox)).toEqual([]);
+  });
+
+  it("skips the body pass entirely when the whole range is oversize", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ messages: [fakeMessage(1, { size: 40 * 1024 * 1024 })] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await run(mailbox, chunk({ folderId: id, uids: [1] }));
+
+    warn.mockRestore();
+    expect(mailbox.fetches).toHaveLength(1);
+    expect(mailbox.fetches[0]).toMatchObject({ includeBody: false });
   });
 });

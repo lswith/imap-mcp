@@ -9,15 +9,19 @@
  */
 
 import type { FolderState } from "@imap-mcp/imap";
+import type { AttachmentRow } from "./attachments";
 import type { MessageRow } from "./normalise";
 
 /**
- * How many messages go into one `batch()`.
+ * How many statements go into one `batch()`.
  *
  * A batch is a single implicit transaction, so this also bounds how much work
- * a failure mid-run throws away.
+ * a failure mid-run throws away. Counted in statements rather than messages
+ * because a message now writes a variable number of them: its own upsert, one
+ * DELETE, and one INSERT per attachment. Forty is about twenty ordinary
+ * messages, which is where this sat before attachments existed.
  */
-const WRITE_BATCH_SIZE = 20;
+const MAX_BATCH_STATEMENTS = 40;
 
 const UPSERT_FOLDER = `
   INSERT INTO folders (name, delimiter, attributes, uidvalidity, uid_next, highest_modseq)
@@ -32,8 +36,9 @@ const UPSERT_MESSAGE = `
   INSERT INTO messages (folder_id, uidvalidity, uid, rfc_message_id, in_reply_to,
                         reference_ids, subject, from_address, from_addresses,
                         to_addresses, cc_addresses, internal_date, sent_date,
-                        size_bytes, flags, body_text, has_attachments, synced_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        size_bytes, flags, body_text, has_attachments, oversize,
+                        synced_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT (folder_id, uidvalidity, uid) DO UPDATE SET
     rfc_message_id = excluded.rfc_message_id,
     in_reply_to = excluded.in_reply_to,
@@ -49,7 +54,42 @@ const UPSERT_MESSAGE = `
     flags = excluded.flags,
     body_text = excluded.body_text,
     has_attachments = excluded.has_attachments,
+    oversize = excluded.oversize,
     synced_at = excluded.synced_at`;
+
+/**
+ * The message this attachment row belongs to, resolved in SQL.
+ *
+ * A subselect rather than an id read back from the upsert, and that is what
+ * lets a message and its attachments go into ONE batch — a single implicit
+ * transaction, so a message row can never end up claiming attachments whose
+ * rows did not land. Reading ids back would need two round trips with a window
+ * between them where exactly that is true.
+ */
+const OWNING_MESSAGE =
+  "(SELECT id FROM messages WHERE folder_id = ? AND uidvalidity = ? AND uid = ?)";
+
+/**
+ * Cleared and rewritten rather than upserted on (message_id, part_index).
+ *
+ * An upsert would leave behind the rows of a part that is no longer there —
+ * which happens when a message that was too large to fetch comes back within
+ * budget, or when the MIME walk classifies parts differently after a change
+ * here. Orphaned R2 objects are left alone; the bytes are cheap and the row is
+ * what anything reads.
+ */
+const DELETE_ATTACHMENTS = `DELETE FROM attachments WHERE message_id = ${OWNING_MESSAGE}`;
+
+const INSERT_ATTACHMENT = `
+  INSERT INTO attachments (message_id, part_index, filename, mime_type, size_bytes,
+                           encoding, content_id, is_inline, r2_key, extracted_text)
+  VALUES (${OWNING_MESSAGE}, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+/** One message and everything that hangs off it, written together. */
+export type MessageWrite = {
+  row: MessageRow;
+  attachments: readonly AttachmentRow[];
+};
 
 export type FolderRecord = {
   id: number;
@@ -99,44 +139,98 @@ export async function upsertFolder(db: D1Database, state: FolderState): Promise<
   };
 }
 
-/** Upserts messages, in batches. Returns how many rows were written. */
-export async function upsertMessages(
+/**
+ * Writes messages and their attachment rows, in batches. Returns how many
+ * message rows were written.
+ *
+ * One message never spans two batches: its upsert, the DELETE that clears its
+ * old attachment rows and the INSERTs that replace them are one transaction or
+ * they are nothing. A message with more attachments than the statement budget
+ * goes in a batch of its own rather than being split.
+ */
+export async function storeMessages(
   db: D1Database,
-  rows: readonly MessageRow[],
+  writes: readonly MessageWrite[],
   syncedAt: number,
 ): Promise<number> {
   let written = 0;
-  for (let start = 0; start < rows.length; start += WRITE_BATCH_SIZE) {
-    const slice = rows.slice(start, start + WRITE_BATCH_SIZE);
-    await db.batch(
-      slice.map((row) =>
-        db
-          .prepare(UPSERT_MESSAGE)
-          .bind(
-            row.folderId,
-            row.uidValidity,
-            row.uid,
-            row.rfcMessageId,
-            row.inReplyTo,
-            row.referenceIds,
-            row.subject,
-            row.fromAddress,
-            row.fromAddresses,
-            row.toAddresses,
-            row.ccAddresses,
-            row.internalDate,
-            row.sentDate,
-            row.sizeBytes,
-            row.flags,
-            row.bodyText,
-            row.hasAttachments,
-            syncedAt,
-          ),
-      ),
-    );
-    written += slice.length;
+  let batch: D1PreparedStatement[] = [];
+  let messages = 0;
+
+  const flush = async () => {
+    if (batch.length === 0) return;
+    await db.batch(batch);
+    written += messages;
+    batch = [];
+    messages = 0;
+  };
+
+  for (const write of writes) {
+    const statements = statementsFor(db, write, syncedAt);
+    if (batch.length > 0 && batch.length + statements.length > MAX_BATCH_STATEMENTS) {
+      await flush();
+    }
+    batch.push(...statements);
+    messages += 1;
   }
+  await flush();
+
   return written;
+}
+
+function statementsFor(
+  db: D1Database,
+  { row, attachments }: MessageWrite,
+  syncedAt: number,
+): D1PreparedStatement[] {
+  // The three values OWNING_MESSAGE resolves on, in the order it binds them.
+  const owner = [row.folderId, row.uidValidity, row.uid] as const;
+
+  return [
+    db
+      .prepare(UPSERT_MESSAGE)
+      .bind(
+        row.folderId,
+        row.uidValidity,
+        row.uid,
+        row.rfcMessageId,
+        row.inReplyTo,
+        row.referenceIds,
+        row.subject,
+        row.fromAddress,
+        row.fromAddresses,
+        row.toAddresses,
+        row.ccAddresses,
+        row.internalDate,
+        row.sentDate,
+        row.sizeBytes,
+        row.flags,
+        row.bodyText,
+        row.hasAttachments,
+        row.oversize,
+        syncedAt,
+      ),
+    // Issued even when there are none, which is one indexed statement per
+    // message: it is what makes "the rows are whatever this fetch saw" true
+    // rather than "whatever this fetch saw, plus whatever an earlier one did".
+    db.prepare(DELETE_ATTACHMENTS).bind(...owner),
+    ...attachments.map((attachment) =>
+      db
+        .prepare(INSERT_ATTACHMENT)
+        .bind(
+          ...owner,
+          attachment.partIndex,
+          attachment.filename,
+          attachment.mimeType,
+          attachment.sizeBytes,
+          attachment.encoding,
+          attachment.contentId,
+          attachment.isInline,
+          attachment.r2Key,
+          attachment.extractedText,
+        ),
+    ),
+  ];
 }
 
 /**

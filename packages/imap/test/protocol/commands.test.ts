@@ -108,6 +108,36 @@ describe("fetching", () => {
     expect(fetch).not.toMatch(/BODY\[/);
   });
 
+  it("still reports RFC822.SIZE when only headers were asked for", async () => {
+    // The sync worker reads sizes for a whole uid range before it pulls any
+    // bodies, so that a message too large to fetch is a decision rather than an
+    // exhausted isolate (#9). That only works because cf-imap asks for
+    // RFC822.SIZE on the header-only path too — a contract over the pinned
+    // dependency, not something this repo controls.
+    const { server, mailbox } = await openMailbox({ messages });
+    await mailbox.selectFolder("Archive");
+
+    const fetched = await mailbox.fetchMessages({ uids: { from: 1, to: 5 }, includeBody: false });
+
+    const fetch = server.commands.find((command) => command.includes("UID FETCH"));
+    expect(fetch).toContain("RFC822.SIZE");
+    expect(fetch).toContain("BODY.PEEK[HEADER.FIELDS");
+    for (const message of fetched) expect(message.size).toBeGreaterThan(0);
+  });
+
+  it("asks for a partial body when a byteLimit is given", async () => {
+    // `<0.N>` is a partial fetch: it truncates rather than refusing, which is
+    // why the worker decides on size first and treats this as a second line of
+    // defence rather than the mechanism.
+    const { server, mailbox } = await openMailbox({ messages });
+    await mailbox.selectFolder("Archive");
+
+    await mailbox.fetchMessages({ uids: 1, byteLimit: 4096 });
+
+    const fetch = server.commands.find((command) => command.includes("UID FETCH"));
+    expect(fetch).toContain("BODY.PEEK[]<0.4096>");
+  });
+
   it("fetches a sparse UID set as one command per contiguous run", async () => {
     const { server, mailbox } = await openMailbox({ messages });
     await mailbox.selectFolder("Archive");

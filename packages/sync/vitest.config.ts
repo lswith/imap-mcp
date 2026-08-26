@@ -51,12 +51,14 @@ export default defineConfig({
       provider: "istanbul",
       reporter: ["text", "text-summary"],
       include: ["src/**/*.ts"],
-      // The ratchet, last raised where the write tools (#12) landed, and a
-      // point or two below what the suite measures so an ordinary defensive
-      // branch does not fail a build on the day it is written.
-      // Raise it as coverage rises. Never lower it to make a red build pass:
-      // the number is only worth anything as a floor that has never moved down.
-      thresholds: { statements: 98, branches: 89, functions: 99, lines: 99 },
+      // The ratchet, last moved where attachments (#9) and the write tools
+      // (#12) landed, and a point or two below what the suite measures so an
+      // ordinary defensive branch does not fail a build on the day it is
+      // written. Raise it as coverage rises. Never lower it to make a red build
+      // pass: the number is only worth anything as a floor that has never moved
+      // down — which is why the two tickets' figures are merged by taking the
+      // higher of each rather than the newer.
+      thresholds: { statements: 98, branches: 90, functions: 99, lines: 99 },
     },
   },
 });

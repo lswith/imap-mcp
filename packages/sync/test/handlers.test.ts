@@ -13,7 +13,7 @@ import worker, {
 } from "../src/index";
 import { describeError } from "../src/log";
 import { CHUNK_QUEUE, DEAD_LETTER_QUEUE, type SyncChunk } from "../src/queue";
-import { FakeMailbox, fakeMessage } from "./support/fake-mailbox";
+import { FakeMailbox, fakeAttachment, fakeMessage } from "./support/fake-mailbox";
 import { FakeQueue } from "./support/fake-queue";
 import { WritableMailbox } from "./support/writable-mailbox";
 
@@ -193,6 +193,29 @@ describe("the queue handler", () => {
     expect(result.explicitAcks).toEqual(["message-1"]);
     expect(result.retryMessages).toEqual([]);
     expect(await count("messages")).toBe(1);
+  });
+
+  it("says what a range did: messages, attachments, and what it could not fetch", async () => {
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({
+      messages: [
+        fakeMessage(1, { attachments: [fakeAttachment()] }),
+        fakeMessage(2, { size: 40 * 1024 * 1024 }),
+      ],
+    });
+    const batch = batchOf([chunk({ folderId: id, uids: [1, 2] })]);
+    const ctx = createExecutionContext();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleQueue(batch, syncEnv(), ctx, { connect: async () => mailbox });
+
+    const lines = log.mock.calls.map(String).join("\n");
+    log.mockRestore();
+    warn.mockRestore();
+    expect(lines).toContain("2 messages");
+    expect(lines).toContain("1 attachments");
+    expect(lines).toContain("1 too large to fetch");
   });
 
   it("handles every range in a batch over one connection", async () => {

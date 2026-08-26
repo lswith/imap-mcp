@@ -88,7 +88,7 @@
   //                  value is yours and is added here at deploy time. Without
   //                  it the worker answers 500 rather than falling open. See
   //                  ../../docs/access.md.
-  //   r2_buckets  -- #9
+  //   r2_buckets  -- attachment bytes, if a read tool ever serves them (#11)
   //
   // This worker holds no IMAP credential, by design, and should never be given
   // one: writes reach the sync worker over the service binding above instead.
