@@ -18,6 +18,12 @@
     },
     "packages/mcp": {
       "ignoreDependencies": ["cloudflare"]
+    },
+    // Types only, and no tests of its own: what it declares is checked by the
+    // two packages that implement and consume it, which is the only place a
+    // contract can be checked. See packages/writes/src/index.ts.
+    "packages/writes": {
+      "project": ["src/**/*.ts"]
     }
   }
 }

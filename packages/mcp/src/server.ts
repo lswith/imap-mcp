@@ -1,16 +1,20 @@
 /**
  * The MCP server itself: what a client sees, and nothing more.
  *
- * One tool for now. `get_message` and `get_thread` are #11, and the write tools
- * that reach the mailbox through a service binding are #12 — this worker holds
- * no IMAP connection and no mailbox credential, which is what confines the
- * app-specific password to the sync worker.
+ * Four tools: one read, three writes. `get_message` and `get_thread` are #11.
+ *
+ * The writes reach the mailbox over a service binding to the sync worker (#12).
+ * This worker holds no IMAP connection and no mailbox credential, which is what
+ * confines the app-specific password to one place — and there is deliberately
+ * no tool here that can send mail or delete it.
  */
 
+import { ALLOWED_FLAGS, type WriteOutcome } from "@imap-mcp/writes";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { DEFAULT_LIMIT, MAX_LIMIT, searchMessages } from "./search";
-import { renderResults } from "./untrusted";
+import { renderResults, renderWrite } from "./untrusted";
+import { createDraft, flagMessage, moveMessage } from "./writes";
 
 const NAME = "imap-mcp";
 const VERSION = "0.1.0";
@@ -54,12 +58,94 @@ const INPUT = z.object({
 });
 
 /**
+ * What a model is told about writing, and it is told all of it.
+ *
+ * The limits are in the description rather than left to be discovered by being
+ * refused, for the same reason search states its cap: a model that does not
+ * know it cannot delete keeps trying to, and the retries are indistinguishable
+ * from an attack in the audit log.
+ */
+const WRITE_NOTE = [
+  "",
+  "Every write is recorded, with the caller and these arguments, whether it succeeds",
+  "or fails. This server cannot send mail and cannot delete it.",
+].join("\n");
+
+const FLAG_DESCRIPTION = [
+  "Set or clear flags on one message.",
+  "",
+  `Only ${ALLOWED_FLAGS.join(", ")} may be changed, and each one flips back. \\Deleted is`,
+  "not settable: marking a message deleted is how it disappears from every mail client,",
+  "and this server has no way to undo that.",
+  "",
+  "The change is verified by reading the flags back from the server, so a success here",
+  "means the mailbox actually holds them.",
+  WRITE_NOTE,
+].join("\n");
+
+const MOVE_DESCRIPTION = [
+  "Move one message to another folder.",
+  "",
+  "Any folder except Trash and Junk, which are refused — a move into either is not",
+  "reversible in the way every other write here is. The message keeps its content and",
+  "its flags, and can be moved back.",
+  "",
+  "The message disappears from the search index when it moves, and reappears the next",
+  "time the destination folder is indexed.",
+  WRITE_NOTE,
+].join("\n");
+
+const DRAFT_DESCRIPTION = [
+  "Save a draft to the Drafts folder for the user to review and send by hand.",
+  "",
+  "This does NOT send anything, and there is no tool here that can: the draft appears",
+  "in the user's mail client exactly as one they had started themselves. Pass",
+  "inReplyTo with the id of a message from a search result to thread the draft under",
+  "that conversation.",
+  WRITE_NOTE,
+].join("\n");
+
+const FLAG_INPUT = z.object({
+  messageId: z.number().int().describe("The id of a message from a search result."),
+  add: z
+    .array(z.string())
+    .optional()
+    .describe(`Flags to set. One or more of: ${ALLOWED_FLAGS.join(", ")}.`),
+  remove: z
+    .array(z.string())
+    .optional()
+    .describe(`Flags to clear. One or more of: ${ALLOWED_FLAGS.join(", ")}.`),
+});
+
+const MOVE_INPUT = z.object({
+  messageId: z.number().int().describe("The id of a message from a search result."),
+  destination: z
+    .string()
+    .describe("Full IMAP path of the destination folder. Trash and Junk are refused."),
+});
+
+const DRAFT_INPUT = z.object({
+  to: z.array(z.string()).optional().describe("Recipient addresses. Required unless replying."),
+  cc: z.array(z.string()).optional().describe("Addresses to copy."),
+  subject: z.string().optional().describe("Subject. Derived from the original when replying."),
+  body: z.string().describe("The message text, as plain text."),
+  inReplyTo: z
+    .number()
+    .int()
+    .optional()
+    .describe("Id of a message from a search result, to thread this draft as a reply to it."),
+});
+
+/**
  * A server instance for one request.
  *
  * `createMcpHandler` calls this per request and hands it no `env`, so the
- * binding arrives by closure from the fetch handler — see src/index.ts.
+ * binding arrives by closure from the fetch handler — see src/index.ts. The
+ * Access context arrives the same way, and is used only by the write tools:
+ * `getIdentity()` is a call rather than a property, so a search does not pay
+ * for an identity lookup it has nothing to do with.
  */
-export function createServer(env: Env): McpServer {
+export function createServer(env: Env, access?: CloudflareAccessContext): McpServer {
   const server = new McpServer({ name: NAME, version: VERSION });
 
   server.registerTool(
@@ -77,6 +163,55 @@ export function createServer(env: Env): McpServer {
       }
       return { content: [{ type: "text", text: renderResults(outcome.hits, outcome.more) }] };
     },
+  );
+
+  // Every write is reversible, which is what `destructiveHint: false` claims
+  // and what the sync worker's refusals are there to keep true: flags flip
+  // back, a move can be moved back, and a draft is a file the user deletes.
+  // `openWorldHint` is true because these do reach a system outside this one.
+  const writeAnnotations = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  };
+
+  const answer = (outcome: WriteOutcome) => ({
+    ...(outcome.ok ? {} : { isError: true }),
+    content: [{ type: "text" as const, text: renderWrite(outcome) }],
+  });
+
+  server.registerTool(
+    "flag_message",
+    {
+      title: "Flag a message",
+      description: FLAG_DESCRIPTION,
+      inputSchema: FLAG_INPUT,
+      annotations: writeAnnotations,
+    },
+    async (input) => answer(await flagMessage(env, access, input)),
+  );
+
+  server.registerTool(
+    "move_message",
+    {
+      title: "Move a message",
+      description: MOVE_DESCRIPTION,
+      inputSchema: MOVE_INPUT,
+      annotations: writeAnnotations,
+    },
+    async (input) => answer(await moveMessage(env, access, input)),
+  );
+
+  server.registerTool(
+    "create_draft",
+    {
+      title: "Save a draft",
+      description: DRAFT_DESCRIPTION,
+      inputSchema: DRAFT_INPUT,
+      annotations: writeAnnotations,
+    },
+    async (input) => answer(await createDraft(env, access, input)),
   );
 
   return server;
