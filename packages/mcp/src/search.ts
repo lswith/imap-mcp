@@ -1,5 +1,6 @@
 /**
- * The read side of the index: one FTS5 query, and the only SQL in this package.
+ * The read side of the index: one FTS5 query, and the query a session starts
+ * from.
  *
  * Search runs against our own index rather than IMAP SEARCH, which on iCloud
  * returns nothing at all for string criteria (#6). That is not a fallback — it
@@ -8,6 +9,8 @@
  * Nothing here returns `body_text`. A broad query that dumped a hundred message
  * bodies into a model's context is the injection surface this whole design is
  * arranged around, so the column is searched and snippetted and never selected.
+ * Reading one is `get_message`'s job (src/message.ts), one message at a time,
+ * by an id this tool handed out.
  */
 
 import { toMatchExpression } from "./fts";
