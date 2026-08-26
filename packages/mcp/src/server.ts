@@ -88,9 +88,10 @@ const MESSAGE_DESCRIPTION = [
 const THREAD_DESCRIPTION = [
   "Return the conversation a message belongs to, oldest first.",
   "",
-  "Messages are grouped by their Message-ID, In-Reply-To and References headers, and,",
-  "only when those link nothing, by a matching subject within 30 days — the answer says",
-  "which of the two happened, and a subject match is a guess rather than a fact.",
+  "Messages are grouped by their Message-ID, In-Reply-To and References headers, and by",
+  "nothing else — a shared subject is not treated as a conversation. Mail from a client",
+  "that strips those headers cannot be threaded here, so an answer naming only the",
+  "message you asked for means those links are absent, not that nothing was sent.",
   "",
   `This returns headers and a short preview per message, at most ${MAX_THREAD_MESSAGES} of them, and`,
   "never a body: read a body with get_message. The same message can appear more than once",

@@ -379,19 +379,14 @@ no IMAP `THREAD` command in the picture: a conversation is derived from
 Message-ID, In-Reply-To and References. RFC 5322 makes a conformant reply carry
 its parent's whole ancestry, so one query reaches ancestors, siblings and
 descendants at once. When those headers link nothing at all — plenty of clients
-strip them — it falls back to a matching subject within 30 days, bounded by a
-minimum subject length and re-checked exactly in TypeScript, and **the answer
-says which of the two happened**, because a subject match is a guess and should
-read as one. The database query behind that fallback is anchored at the end of
-the subject rather than searching anywhere inside it, and ignores spacing
-entirely: the prefixes replies add are prefixes, so a suffix test keeps every
-reply form while refusing the unrelated mail that merely starts the same way —
-which would otherwise be able to crowd the genuine replies out of the answer.
-Two subjects differing only in the case of a non-ASCII letter are the one thing
-it cannot match, because SQLite has only ASCII case folding; that is pinned by a
-test rather than left to be found. A message filed in several folders comes back once per copy rather
-than collapsed, since each copy is a different message on the server and that
-triple is what the write tools will act on.
+strip them — the answer is the message you asked for and a note saying why:
+no message names it and none is named by it, and mail from such a client cannot
+be threaded from this index. There was a subject-matching fallback here and it
+was removed rather than repaired. It could not be made correct — the exact
+comparison has to happen outside SQL, so the query that narrowed always let
+through subjects the comparison would reject, and anything a row limit cut was
+never compared at all — and what it bought was a grouping that had to describe
+itself as a guess. A short answer that is true beats a long one that might be.
 
 ## Roadmap
 

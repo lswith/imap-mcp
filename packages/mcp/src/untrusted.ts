@@ -302,25 +302,16 @@ function bodyRegion(message: MessageRecord, body: string): string {
 /**
  * What the caller is told about how these messages came to be listed together.
  *
- * "Nothing else belongs" is a claim, and it is only available when the search
- * that would have found something else actually finished. Cut short, the honest
- * answer is that nothing matched *and* the looking was incomplete — saying both
- * of the confident sentences instead would tell the reader two incompatible
- * things and invite it to believe the reassuring one.
+ * Two sentences, because there are two honest answers. There used to be a
+ * third, for a subject-matching fallback, and it had to say the grouping might
+ * be wrong — which is a good reason not to have shown it.
  */
 function basisNote(thread: Extract<ThreadOutcome, { ok: true }>): string {
   if (thread.basis === "alone") {
-    return thread.truncated
-      ? "Nothing else that was looked at belongs to this conversation, but the search for " +
-          "candidates hit its limit before it finished, so there may be more that was never " +
-          "examined."
-      : "Nothing else in the index appears to belong to this conversation.";
-  }
-  if (thread.basis === "subject") {
     return (
-      "No reference headers linked these messages. They were grouped only because their " +
-      "subjects match once Re:/Fwd: is stripped, within 30 days of the message asked for — " +
-      "they may not actually be related, and other replies may be missing."
+      "Nothing else in the index names this message or is named by it. Mail whose client " +
+      "strips the In-Reply-To and References headers cannot be threaded from the index, so " +
+      "a conversation may exist that this cannot see."
     );
   }
   return "These messages were grouped by their Message-ID, In-Reply-To and References headers.";
@@ -349,9 +340,7 @@ export function renderThread(thread: Extract<ThreadOutcome, { ok: true }>): stri
   const rows = thread.messages.map((message) => threadLine(message, thread.seedId)).join("\n");
   const id = nonceFor(rows);
   const notes = [basisNote(thread)];
-  // Not repeated when the basis note already carried it: "alone" and truncated
-  // is one fact about an unfinished search, not two facts about a conversation.
-  if (thread.truncated && thread.basis !== "alone") {
+  if (thread.truncated) {
     notes.push(
       `The ${thread.messages.length} most recent messages are shown; older messages in this ` +
         "conversation are not.",

@@ -9,6 +9,19 @@
  * short preview per message — never the bodies. Reading a thread must not be a
  * way to put fifty attacker-written bodies in front of a model in one call;
  * `get_message` serves one body at a time, by id, and that is the only path.
+ *
+ * There was a second pass here, for mail whose headers link nothing: same
+ * normalised subject, within thirty days. It is gone, and the reason is worth
+ * keeping. It could not be made correct. The exact comparison has to happen in
+ * TypeScript — SQLite has no Unicode case fold and no expression that *is*
+ * `normaliseSubject` — so the SQL that narrowed always admitted subjects the
+ * check would reject, and whatever a row limit cut was never judged at all. Five
+ * rounds of tightening it ("X — daily digest 47", "Weekly X", "URGENT: X", …)
+ * each moved which subjects those were rather than removing them. What the pass
+ * bought in exchange was a grouping that had to label itself a guess.
+ *
+ * So a conversation here is what the headers name, and nothing else. That is
+ * less than a mail client shows, and it is the part that can be relied on.
  */
 
 import {
@@ -35,44 +48,14 @@ export const MAX_THREAD_MESSAGES = 50;
 export const MAX_THREAD_IDS = 32;
 
 /**
- * Below this, the subject fallback does not run.
- *
- * A message subjected "Hi" would otherwise return an arbitrary slice of the
- * mailbox with a note claiming it was a conversation.
- */
-const MIN_SUBJECT_CHARS = 8;
-
-/** How far either side of the seed the subject fallback will look: 30 days. */
-export const SUBJECT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-
-/**
- * How many rows one page of the subject scan carries.
- *
- * Two short columns, so a page can be wide. It is a page rather than a ceiling
- * because a ceiling on rows is a ceiling on how many decoys it takes to hide a
- * genuine reply — raising it moves that number, and paging removes it: the scan
- * walks the window until it runs out of *window*, not out of rows.
- */
-export const SUBJECT_CANDIDATES = 500;
-
-/**
- * The runaway guard, in pages.
- *
- * With the page above this is ten thousand rows, all of which had to pass a
- * predicate demanding the subject end with this exact one. A window that
- * densely populated is pathological rather than merely busy, and stopping there
- * is reported as truncation rather than passed off as a finished search.
- */
-const MAX_SCAN_PAGES = 20;
-
-/**
  * How the messages were decided to belong together.
  *
- * Rendered outside the frame, because it is an assertion this server is making
- * about the mail rather than anything the mail said. `"subject"` in particular
- * has to be visible: it means the grouping is a guess.
+ * Rendered outside the frame, because it is an assertion this server makes
+ * about the mail rather than anything the mail said. Two values, because there
+ * are only two honest answers now: the headers named these, or nothing else
+ * was named.
  */
-export type ThreadBasis = "references" | "subject" | "alone";
+export type ThreadBasis = "references" | "alone";
 
 export type ThreadOutcome =
   | {
@@ -98,26 +81,6 @@ export type ThreadOutcome =
  */
 const MESSAGE_ID = /<[^<>\s]{1,512}>/gu;
 
-/**
- * Reply and forward prefixes, in the languages a mailbox actually sees.
- *
- * The outer `+` repeats, so "Re: Fwd: Re:" strips in one pass, and `\[\d+\]`
- * catches the "Re[2]:" some clients emit. The `:` is required, so a subject
- * that merely starts with the letters — "Reference numbers" — is left alone.
- */
-const REPLY_PREFIX =
-  /^\s*(?:(?:re|aw|fw|fwd|wg|sv|vs|antw|odp|rif|res|tr)\s*(?:\[\d+\])?\s*:\s*)+/iu;
-
-export function normaliseSubject(subject: string): string {
-  return subject.replace(REPLY_PREFIX, "").replace(/\s+/gu, " ").trim().toLowerCase();
-}
-
-/**
- * Every Message-ID the seed's own headers name: itself, its parent, its ancestry.
- *
- * `reference_ids` is JSON this repo wrote, but a backfill or a hand-fix could
- * leave anything there and a throw would take the tool down with it.
- */
 export function identityClosure(seed: ThreadIdentity): string[] {
   const ids: string[] = [];
   const collect = (value: string | null | undefined) => {
@@ -153,11 +116,12 @@ export function identityClosure(seed: ThreadIdentity): string[] {
  * the root and the seed's closure contains it. One query therefore reaches
  * ancestors, siblings and descendants at any depth at once. Iterating a
  * transitive closure would buy only the clients that truncate References, at
- * the price of another full scan per round — and those clients are exactly what
- * the subject fallback is for.
+ * the price of another full scan per round.
  *
- * The honest cost of that: a *partly* broken thread stays partial, because the
- * fallback fires only when this pass finds nothing at all.
+ * The honest cost, stated rather than papered over: mail whose client strips
+ * these headers cannot be threaded from this index at all, and a *partly*
+ * broken thread comes back partial. `basisNote` in untrusted.ts says so in the
+ * answer.
  */
 const HEADER_PASS = `
   WITH ids(value) AS (SELECT value FROM json_each(?1))
@@ -182,122 +146,14 @@ const HEADER_PASS = `
   ORDER BY m.internal_date DESC, m.id DESC
   LIMIT ?2`;
 
-/**
- * The fallback: same normalised subject, near the same time.
- *
- * SQL narrows and TypeScript decides — and the shape below exists because
- * those two sentences were not actually true of each other. While the
- * candidate query carried both the previews and the row limit, whatever it cut
- * was never judged: any subject its prefilter admitted and the exact check
- * rejected was a slot a genuine older reply could have had. Three rounds of
- * tightening the prefilter each moved the decoy's shape rather than removing
- * it — "X — daily digest 47", then "Weekly X", then "URGENT: X" — because no
- * expression SQLite can write is `normaliseSubject`, and anything short of it
- * admits *something* the check will reject.
- *
- * So the limit no longer decides. The scan below reads identity and subject
- * only — no previews, so a wide read is cheap — TypeScript filters it exactly,
- * and only the rows that survived are fetched in full. A decoy can now cost a
- * row in the scan; it cannot cost a genuine reply its place.
- *
- * What is left for SQL is a **superset test**, and that is all it has to be:
- * everything normalisation strips is a reply prefix ending in a colon, so an
- * exact match's key is either the needle itself or a colon followed by it.
- * Admitting more than that is now merely wasteful. It is still `=` against a
- * `substr`, never `LIKE`, so there is no pattern language for a subject to
- * smuggle a wildcard through: `_` is common in real subjects.
- *
- * Whitespace is removed from both sides rather than collapsed, because
- * normalisation collapses it and a prefilter that disagreed would drop
- * "Re:  Report   from operations" before anything judged it. Removing rather
- * than collapsing because SQLite has no regex to collapse with, and every
- * character `\s` matches rather than the four obvious ones — see
- * `SUBJECT_WHITESPACE`.
- *
- * One imprecision remains, and it can only cause a miss, never a false
- * include, because TypeScript is what decides: **SQLite's `lower()` is
- * ASCII-only**, so two subjects differing only in the case of a non-ASCII
- * letter are invisible to each other here. workerd exposes no Unicode-aware
- * fold, so the fix is a normalised-subject column written at index time — a
- * schema change and a backfill, and therefore its own ticket. A test pins it.
- */
-
-/**
- * Every character JavaScript's `\s` matches, as code points.
- *
- * This list is the single source of both halves of the whitespace agreement:
- * the SQL prefilter removes exactly these, and so does the needle it is
- * compared against. Writing it out matters because the two halves run in
- * different languages — `normaliseSubject` collapses `\s`, which is 25
- * characters including the non-breaking space and the en and em spaces, while
- * SQLite has no character class at all.
- *
- * A test scans the BMP and asserts this list is exactly what `\s` matches, so
- * "these agree" is proved rather than intended. Index-time stripping does not
- * help: a non-breaking space is legitimate text, so `stripInvisible` rightly
- * leaves it in the subject it stores.
- */
-export const SUBJECT_WHITESPACE = [
-  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005,
-  0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
-] as const;
-
-/**
- * The subject reduced to what a comparison should see: lowercased as far as
- * SQLite can, with every whitespace character removed.
- *
- * Generated rather than written out, because twenty-five nested `replace()`
- * calls are not something to keep correct by hand — and because generating it
- * from the same list the needle uses is what makes the two sides agree by
- * construction rather than by review.
- */
-const SUBJECT_KEY = SUBJECT_WHITESPACE.reduce(
-  (expression, code) => `replace(${expression}, char(${code}), '')`,
-  "lower(m.subject)",
-);
-const SUBJECT_SCAN = `
-  SELECT m.id, m.subject, m.internal_date AS internalDate
-  FROM messages m
-  JOIN folders f ON f.id = m.folder_id
-  WHERE ${GENERATION_GUARD}
-    AND m.internal_date BETWEEN ?1 AND ?2
-    -- Keyset pagination rather than OFFSET: the pages have to be stable while
-    -- walking, and (internal_date, id) is the same order the scan returns.
-    AND (m.internal_date < ?5 OR (m.internal_date = ?5 AND m.id < ?6))
-    AND ( ${SUBJECT_KEY} = ?3
-       OR substr(${SUBJECT_KEY}, -(length(?3) + 1)) = ':' || ?3 )
-  ORDER BY m.internal_date DESC, m.id DESC
-  LIMIT ?4`;
-
-/** The full rows, for the handful of ids that survived the exact check. */
-const PREVIEWS_BY_ID = `
-  SELECT ${PREVIEW_COLUMNS}
-  FROM messages m
-  JOIN folders f ON f.id = m.folder_id
-  WHERE m.id IN (SELECT value FROM json_each(?1))
-  ORDER BY m.internal_date DESC, m.id DESC`;
-
 export async function getThread(db: D1Database, input: { id: number }): Promise<ThreadOutcome> {
   const seeded: MessageOutcome<ThreadPreview> = await loadSeed(db, input.id);
   if (!seeded.ok) return { ok: false, reason: seeded.reason };
   const seed = seeded.message;
 
   const closure = identityClosure(seed);
+  const rows = closure.length === 0 ? [] : await headerPass(db, closure);
   let basis: ThreadBasis = "references";
-  let rows = closure.length === 0 ? [] : await headerPass(db, closure);
-
-  let prefilterCut = false;
-  if (rows.every((row) => row.id === seed.id)) {
-    const subject = normaliseSubject(seed.subject);
-    if (subject.length < MIN_SUBJECT_CHARS) {
-      rows = [];
-    } else {
-      const candidates = await subjectPass(db, seed, subject);
-      rows = candidates.rows;
-      prefilterCut = candidates.cut;
-    }
-    basis = "subject";
-  }
 
   const messages = new Map<number, ThreadPreview>();
   // The seed goes in first so the message the caller actually named survives
@@ -305,7 +161,7 @@ export async function getThread(db: D1Database, input: { id: number }): Promise<
   // newest first, so filling to the cap from there keeps the recent end of a
   // conversation, which is the end worth keeping.
   messages.set(seed.id, seed);
-  let truncated = prefilterCut;
+  let truncated = false;
   for (const row of rows) {
     if (messages.has(row.id)) continue;
     if (messages.size >= MAX_THREAD_MESSAGES) {
@@ -342,82 +198,4 @@ async function headerPass(db: D1Database, closure: string[]): Promise<PreviewRow
     .bind(JSON.stringify(closure), MAX_THREAD_MESSAGES + 1)
     .all<PreviewRow>();
   return results;
-}
-
-/** The needle, reduced the same way `SUBJECT_KEY` reduces the column. */
-const WHITESPACE = new RegExp(
-  `[${SUBJECT_WHITESPACE.map((code) => `\\u{${code.toString(16)}}`).join("")}]`,
-  "gu",
-);
-
-function subjectKey(subject: string): string {
-  return subject.replace(WHITESPACE, "");
-}
-
-/**
- * Candidates, and whether the prefilter itself ran out of room.
- *
- * `cut` is not the same fact as the result cap being reached: it says older
- * rows were dropped before anything judged them, so the answer may be missing
- * members it would otherwise have kept. It is reported rather than hidden.
- */
-async function subjectPass(
-  db: D1Database,
-  seed: ThreadPreview,
-  subject: string,
-): Promise<{ rows: PreviewRow[]; cut: boolean }> {
-  const needle = subjectKey(subject);
-  const floor = seed.internalDate - SUBJECT_WINDOW_MS;
-  const ceiling = seed.internalDate + SUBJECT_WINDOW_MS;
-
-  const matched: { id: number }[] = [];
-  // The cursor starts just past the newest row the window can hold.
-  let beforeDate = ceiling + 1;
-  let beforeId = Number.MAX_SAFE_INTEGER;
-  let pages = 0;
-  let exhausted = false;
-
-  // Newest first, and it stops as soon as it has a thread's worth: anything
-  // older than that could not be kept anyway. Otherwise it walks until the
-  // window is spent, which is what makes the number of decoys irrelevant —
-  // they cost a row in a scan rather than a genuine reply its place.
-  while (matched.length < MAX_THREAD_MESSAGES && pages < MAX_SCAN_PAGES) {
-    const { results } = await db
-      .prepare(SUBJECT_SCAN)
-      .bind(floor, ceiling, needle, SUBJECT_CANDIDATES, beforeDate, beforeId)
-      .all<{ id: number; subject: string; internalDate: number }>();
-    pages++;
-
-    // The decision, and the only one. Everything above it was narrowing.
-    for (const row of results) {
-      if (normaliseSubject(row.subject) === subject) matched.push({ id: row.id });
-    }
-
-    const last = results.at(-1);
-    if (results.length < SUBJECT_CANDIDATES || !last) {
-      exhausted = true;
-      break;
-    }
-    beforeDate = last.internalDate;
-    beforeId = last.id;
-  }
-
-  const wanted = matched.slice(0, MAX_THREAD_MESSAGES);
-  // No empty-set guard: the seed's own row matches its own subject exactly, so
-  // this list always holds at least it. An empty json_each would be harmless
-  // anyway, but a branch nothing can reach is worse than the query it avoids.
-  const { results } = await db
-    .prepare(PREVIEWS_BY_ID)
-    .bind(JSON.stringify(wanted.map((row) => row.id)))
-    .all<PreviewRow>();
-
-  return {
-    rows: results,
-    // Two ways to have left something out, and they are one thing to a reader:
-    // the walk stopped before the window was spent — because it had a thread's
-    // worth already, or because it ran out of pages — or more subjects matched
-    // than a thread may carry. Where it is not known, "there may be more" is
-    // the honest direction to be wrong in.
-    cut: !exhausted || matched.length > wanted.length,
-  };
 }

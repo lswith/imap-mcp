@@ -388,20 +388,19 @@ describe("renderThread", () => {
   });
 
   it("says how the messages were grouped, after the closing tag", () => {
-    const guessed = renderThread(threadOf([preview({ id: 1 }), preview({ id: 2 })], "subject"));
-    const closing = `</mailbox-thread nonce="${frameNonce(guessed, "mailbox-thread")}">`;
+    const rendered = renderThread(threadOf([preview({ id: 1 }), preview({ id: 2 })]));
+    const closing = `</mailbox-thread nonce="${frameNonce(rendered, "mailbox-thread")}">`;
 
-    expect(guessed).toMatch(/may not actually be related/i);
-    expect(guessed.indexOf("may not actually be related")).toBeGreaterThan(
-      guessed.indexOf(closing),
-    );
+    expect(rendered.indexOf("References headers")).toBeGreaterThan(rendered.indexOf(closing));
   });
 
-  it("distinguishes a grouping made from headers from one guessed at", () => {
+  it("claims only what the headers actually said", () => {
     const byHeaders = renderThread(threadOf([preview({ id: 1 }), preview({ id: 2 })]));
 
-    expect(byHeaders).toMatch(/In-Reply-To|References|headers/i);
-    expect(byHeaders).not.toMatch(/may not actually be related/i);
+    expect(byHeaders).toMatch(/Message-ID, In-Reply-To and References/);
+    // No hedging left to do: the fallback that had to say "these may not be
+    // related" is gone, so a grouping shown is a grouping the headers made.
+    expect(byHeaders).not.toMatch(/may not actually be related|subjects match/i);
   });
 
   it("says when older messages were left out", () => {
@@ -411,20 +410,12 @@ describe("renderThread", () => {
     expect(renderThread(threadOf([preview()]))).not.toMatch(/older/i);
   });
 
-  it("does not claim both that nothing was missed and that something was", () => {
-    // basis "alone" with truncation is a real state: the prefilter ran out of
-    // room and nothing that survived it matched. Saying "nothing else belongs"
-    // and "older messages are not shown" in the same breath tells the reader
-    // two incompatible things and invites it to believe the confident one.
-    const rendered = renderThread(threadOf([preview()], "alone", true));
-
-    expect(rendered).not.toMatch(/nothing else in the index appears to belong/i);
-    expect(rendered).toMatch(/limit|ran out of room|may be missing|incomplete/i);
-  });
-
-  it("answers plainly when nothing else belongs to the conversation", () => {
+  it("says what it could not see when nothing else is named", () => {
     const rendered = renderThread(threadOf([preview()], "alone"));
 
-    expect(rendered).toMatch(/nothing else/i);
+    expect(rendered).toMatch(/nothing else in the index names this message/i);
+    // The limit is named rather than left implied: a client that strips the
+    // headers has a conversation this cannot reconstruct.
+    expect(rendered).toMatch(/strips the In-Reply-To and References headers/i);
   });
 });

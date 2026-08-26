@@ -1,16 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BAD_ID, NOT_FOUND } from "../src/message";
-import {
-  getThread,
-  identityClosure,
-  MAX_THREAD_IDS,
-  MAX_THREAD_MESSAGES,
-  normaliseSubject,
-  SUBJECT_CANDIDATES,
-  SUBJECT_WHITESPACE,
-  SUBJECT_WINDOW_MS,
-} from "../src/thread";
+import { getThread, identityClosure, MAX_THREAD_IDS, MAX_THREAD_MESSAGES } from "../src/thread";
 import { clearIndex, seedMessage } from "./support/seed";
 
 const ROOT = "<root@example.invalid>";
@@ -69,28 +60,6 @@ describe("json1 through D1", () => {
       .all<{ n: number }>();
 
     expect(results[0]?.n).toBe(0);
-  });
-});
-
-describe("normaliseSubject", () => {
-  it("collapses every reply and forward prefix onto one key", async () => {
-    const forms = [
-      "Quarterly invoice",
-      "Re: Quarterly invoice",
-      "RE: Quarterly invoice",
-      "Fwd: Quarterly invoice",
-      "FW: Quarterly invoice",
-      "AW: Quarterly invoice",
-      "Re: Fwd: Re: Quarterly invoice",
-      "Re[2]: Quarterly invoice",
-      "  re :  Quarterly   invoice  ",
-    ];
-
-    expect(new Set(forms.map(normaliseSubject)).size).toBe(1);
-  });
-
-  it("leaves a subject that only looks like a prefix alone", async () => {
-    expect(normaliseSubject("Reference numbers")).toBe("reference numbers");
   });
 });
 
@@ -153,21 +122,6 @@ describe("identityClosure", () => {
   });
 });
 
-describe("SUBJECT_WHITESPACE", () => {
-  it("is exactly the set JavaScript's \\s matches", () => {
-    // The prefilter and the check that decides are both derived from this
-    // list, so the guarantee they agree is only as good as the list being
-    // complete. Scanned rather than asserted by eye: a character that matches
-    // \s but is missing here is a genuine thread member silently dropped.
-    const matched: number[] = [];
-    for (let code = 0; code <= 0xffff; code++) {
-      if (/\s/u.test(String.fromCharCode(code))) matched.push(code);
-    }
-
-    expect([...SUBJECT_WHITESPACE].sort((a, b) => a - b)).toEqual(matched);
-  });
-});
-
 describe("getThread", () => {
   beforeEach(clearIndex);
 
@@ -210,7 +164,7 @@ describe("getThread", () => {
     expect((await thread(root)).messages).toHaveLength(3);
   });
 
-  it("does not fall back to subjects when the headers answered", async () => {
+  it("groups only what the headers name, not what merely shares a subject", async () => {
     const { root } = await seedConversation();
     const decoy = await seedMessage({
       subject: "Re: Quarterly invoice",
@@ -286,233 +240,31 @@ describe("getThread", () => {
     expect(found.messages.map((message) => message.id)).toContain(ids.at(-1));
   });
 
-  describe("the subject fallback", () => {
-    it("groups a reply that carries no reference headers at all", async () => {
-      const first = await seedMessage({
-        subject: "Report from operations",
-        date: "2026-03-01T09:00:00Z",
-      });
-      const reply = await seedMessage({
-        subject: "Re: Report from operations",
-        date: "2026-03-05T09:00:00Z",
-      });
+  describe("mail whose headers link nothing", () => {
+    // There was a subject fallback here: same normalised subject, within thirty
+    // days, when the reference headers found nothing. It is gone deliberately.
+    // It could not be made correct — no SQL predicate is normaliseSubject, so
+    // the scan always admitted subjects the exact check rejected, and five
+    // rounds of narrowing it only moved which subjects those were. And what it
+    // bought was a guess that had to label itself a guess. Returning the one
+    // message that was actually asked for is the honest answer.
+    it("does not group two messages merely because their subjects match", async () => {
+      const first = await seedMessage({ subject: "Report from operations" });
+      await seedMessage({ subject: "Re: Report from operations" });
 
       const found = await thread(first);
 
-      expect(found.messages.map((message) => message.id)).toEqual([first, reply]);
-      expect(found.basis).toBe("subject");
+      expect(found.messages.map((message) => message.id)).toEqual([first]);
+      expect(found.basis).toBe("alone");
     });
 
-    it("does not reach past its window", async () => {
-      const first = await seedMessage({
-        subject: "Report from operations",
-        internalDate: Date.parse("2026-03-01T09:00:00Z"),
-      });
-      await seedMessage({
-        subject: "Re: Report from operations",
-        internalDate: Date.parse("2026-03-01T09:00:00Z") + SUBJECT_WINDOW_MS + 60_000,
-      });
+    it("answers with the seed alone for a message carrying no ids at all", async () => {
+      const first = await seedMessage({ subject: "Report from operations" });
 
       const found = await thread(first);
 
       expect(found.messages).toHaveLength(1);
-      expect(found.basis).toBe("alone");
-    });
-
-    it("does not run at all on a subject too short to mean anything", async () => {
-      const first = await seedMessage({ subject: "Hi" });
-      await seedMessage({ subject: "Re: Hi" });
-
-      expect((await thread(first)).basis).toBe("alone");
-    });
-
-    it("rejects a subject SQL matched but that is not the same subject", async () => {
-      const first = await seedMessage({ subject: "Q3 invoice review" });
-      const decoy = await seedMessage({ subject: "Q3 invoice review meeting notes" });
-
-      const found = await thread(first);
-
-      expect(found.messages.map((message) => message.id)).not.toContain(decoy);
-      expect(found.basis).toBe("alone");
-    });
-
-    it("is not starved of real matches by messages that merely contain the subject", async () => {
-      // The prefilter is a superset test and the exact check happens in
-      // TypeScript, so anything the SQL limit cuts is decided before it is
-      // judged. A daily digest whose subject carries the seed's as a prefix
-      // must not be able to push the genuine reply out of the candidate set.
-      const at = Date.parse("2026-03-10T09:00:00Z");
-      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
-      const reply = await seedMessage({
-        subject: "Re: Report from operations",
-        internalDate: at - 60_000,
-      });
-      for (let n = 0; n < MAX_THREAD_MESSAGES + 10; n++) {
-        await seedMessage({
-          subject: `Report from operations — daily digest ${n}`,
-          internalDate: at + (n + 1) * 60_000,
-        });
-      }
-
-      const found = await thread(first);
-
-      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
-      expect(found.basis).toBe("subject");
-    });
-
-    it("groups a reply whose subject differs only in spacing", async () => {
-      // normaliseSubject collapses runs of whitespace and trims, so these are
-      // the same subject as far as the check that decides is concerned. The
-      // prefilter has to agree, or it discards the row before that check runs.
-      const first = await seedMessage({ subject: "Report from operations" });
-      const reply = await seedMessage({ subject: "Re:  Report   from\toperations  " });
-
-      const found = await thread(first);
-
-      expect(found.messages.map((message) => message.id)).toEqual([first, reply]);
-      expect(found.basis).toBe("subject");
-    });
-
-    it("groups replies differing by any character JavaScript calls whitespace", async () => {
-      // normaliseSubject collapses /\s/, which is 25 characters and not the
-      // four ASCII ones — a subject carrying a non-breaking space or an en
-      // space is the same subject to the check that decides, so the prefilter
-      // has to remove those too or it discards the row before that check runs.
-      for (const code of SUBJECT_WHITESPACE) {
-        await clearIndex();
-        const character = String.fromCodePoint(code);
-        const first = await seedMessage({ subject: "Report from operations" });
-        const reply = await seedMessage({ subject: `Re: Report${character}from operations` });
-
-        const found = await thread(first);
-
-        expect(
-          found.messages.map((message) => message.id),
-          `U+${code.toString(16)}`,
-        ).toEqual([first, reply]);
-      }
-    });
-
-    it("misses a reply that differs only by non-ASCII case, which is a known limit", async () => {
-      // SQLite's lower() is ASCII-only and workerd exposes no Unicode-aware
-      // fold, so the prefilter cannot see these as the same subject however
-      // the needle is shaped. Pinned rather than left to be rediscovered: the
-      // fix is a normalised-subject column written at index time, which is a
-      // schema change and a backfill, so it belongs in its own ticket.
-      const first = await seedMessage({ subject: "Réunion hebdomadaire" });
-      await seedMessage({ subject: "Re: RÉUNION HEBDOMADAIRE" });
-
-      expect((await thread(first)).basis).toBe("alone");
-    });
-
-    it("is not starved by subjects that end with the seed's but are not it", async () => {
-      // A decoy only has to *end* with the key to pass the prefilter, and
-      // "Weekly report from operations" does. Enough of them fill the candidate
-      // limit and the genuine older reply is discarded before the exact check
-      // ever sees it — the same starvation as before, through a narrower door.
-      const at = Date.parse("2026-03-10T09:00:00Z");
-      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
-      const reply = await seedMessage({
-        subject: "Re: Report from operations",
-        internalDate: at - 60_000,
-      });
-      for (let n = 0; n < SUBJECT_CANDIDATES; n++) {
-        await seedMessage({
-          subject: `Weekly ${n} report from operations`,
-          internalDate: at + (n + 1) * 60_000,
-        });
-      }
-
-      const found = await thread(first);
-
-      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
-    });
-
-    it("is not starved by labelled subjects that end with the seed's", async () => {
-      // "URGENT: Report from operations" clears the colon anchor and is still a
-      // different subject. Narrowing the prefilter again would only move this
-      // decoy's shape; what has to stop being true is that SQL's cut decides
-      // which rows the exact check gets to see.
-      const at = Date.parse("2026-03-10T09:00:00Z");
-      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
-      const reply = await seedMessage({
-        subject: "Re: Report from operations",
-        internalDate: at - 60_000,
-      });
-      for (let n = 0; n < 220; n++) {
-        await seedMessage({
-          subject: `URGENT${n}: Report from operations`,
-          internalDate: at + (n + 1) * 60_000,
-        });
-      }
-
-      const found = await thread(first);
-
-      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
       expect(found.truncated).toBe(false);
-    });
-
-    it("keeps looking past a scan's worth of decoys to reach a real reply", async () => {
-      // More decoys than one scan can carry. A bigger number would only move
-      // the threshold, so the scan pages through the window instead of reading
-      // a fixed slice of it: what ends the search is running out of window, not
-      // running out of rows.
-      const at = Date.parse("2026-03-10T09:00:00Z");
-      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
-      const reply = await seedMessage({
-        subject: "Re: Report from operations",
-        internalDate: at - 60_000,
-      });
-      for (let n = 0; n < SUBJECT_CANDIDATES + 100; n++) {
-        await seedMessage({
-          subject: `URGENT${n}: Report from operations`,
-          internalDate: at + (n + 1) * 60_000,
-        });
-      }
-
-      const found = await thread(first);
-
-      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
-      expect(found.truncated).toBe(false);
-    });
-
-    it("says so when it stopped looking before the window was spent", async () => {
-      // More real members than a thread may carry, so the walk stops with a
-      // thread's worth in hand and never learns what else is out there. The
-      // caller is told, rather than left to read a full page as a full answer.
-      const at = Date.parse("2026-03-10T09:00:00Z");
-      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
-      for (let n = 0; n < MAX_THREAD_MESSAGES + 10; n++) {
-        await seedMessage({
-          subject: "Re: Report from operations",
-          internalDate: at + (n + 1) * 60_000,
-        });
-      }
-
-      const found = await thread(first);
-
-      expect(found.truncated).toBe(true);
-      expect(found.messages).toHaveLength(MAX_THREAD_MESSAGES);
-    });
-
-    it("runs for a seed carrying no Message-ID and no references", async () => {
-      const first = await seedMessage({ subject: "Report from operations" });
-      const reply = await seedMessage({ subject: "Fwd: Report from operations" });
-
-      expect((await thread(first)).messages.map((message) => message.id)).toEqual([first, reply]);
-    });
-
-    it("degrades to alone rather than to nonsense when internal_date is the epoch", async () => {
-      // internalDateOf() falls back to 0 when a message has no usable date, so
-      // the window covers December 1969 and matches nothing. That is the right
-      // failure: no conversation rather than an arbitrary one.
-      const first = await seedMessage({ subject: "Report from operations", internalDate: 0 });
-      await seedMessage({
-        subject: "Re: Report from operations",
-        date: "2026-03-05T09:00:00Z",
-      });
-
-      expect((await thread(first)).basis).toBe("alone");
     });
   });
 
