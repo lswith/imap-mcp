@@ -34,7 +34,7 @@ pnpm install         # once, from anywhere in the repo — installs both package
 pnpm run lint        # biome check (lint + format)
 pnpm run lint:fix    # biome check --write
 pnpm run typecheck   # wrangler types + tsc --noEmit, both packages
-pnpm run test        # vitest inside workerd, both packages
+pnpm run test        # node --test for scripts/, then vitest inside workerd
 pnpm run dead-code   # knip
 pnpm run build       # wrangler deploy --dry-run, both packages
 
@@ -54,9 +54,18 @@ pnpm run deploy      # wrangler deploy
 
 - **TypeScript throughout.** Biome handles lint and format; `pnpm run lint`
   covers both.
-- **Nothing deployment-specific is committed.** No account IDs, zone tags,
-  Access AUDs or team domains in `wrangler.jsonc` — this repo is public. They
-  are documented in `.env.example` and added by whoever deploys.
+- **Nothing deployment-specific is committed, and that is now a mechanism
+  rather than a rule.** No account IDs, zone tags or Access AUDs in
+  `wrangler.jsonc` — this repo is public. `pnpm run deploy` runs
+  `scripts/deploy-config.mjs`, which merges `.env` into a copy of the committed
+  config under the gitignored `.wrangler/` and points wrangler at it with a
+  redirected configuration, so no committed file is ever edited to deploy. Two
+  things follow. The redirect covers `deploy` and `dev` but **not**
+  `wrangler types`, so `pnpm run typecheck` and the test suite still read the
+  committed config. And the `database_id` wrangler writes back lands in that
+  generated file, so the script promotes it to `.env` on sight — `.env` is the
+  durable record and `.wrangler/` is a cache you can delete. Losing that id
+  provisions a *second* database and nothing errors.
 - **`workers_dev` and `preview_urls` stay `false`** on both workers. Without
   them a worker is live at `<name>.<account>.workers.dev` regardless of routes
   or Access policy.
@@ -71,10 +80,11 @@ pnpm run deploy      # wrangler deploy
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
 (`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6), incremental
-sync (#8) and the MCP server (`packages/mcp`, #7) are implemented and tested.
-The rest is tracked as issues on this repo: #9 attachments, #10 Access, #11
-`get_message` and `get_thread`, #12 write tools, #24 flag reconciliation. See
-the roadmap table in README.md for the full list.
+sync (#8), the MCP server (`packages/mcp`, #7) and the Access gate
+(`packages/mcp/src/access.ts`, #10) are implemented and tested. The rest is
+tracked as issues on this repo: #9 attachments, #11 `get_message` and
+`get_thread`, #12 write tools, #24 flag reconciliation. See the roadmap table
+in README.md for the full list, and docs/access.md for the Access setup.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -211,4 +221,78 @@ model is decided:
 - **Origin is validated, Host is not.** On Workers `request.url` is built from
   the Host header, so checking one against the other answers nothing. Origin is
   what separates a browser from an MCP client: clients send none and pass, a
-  page on another site sends its own and is turned away.
+  page on another site sends its own and is turned away. The one place Host is
+  reflected is the RFC 9728 document, which asserts nothing but the hostname the
+  caller itself asked for.
+
+And from the Access gate (`packages/mcp/src/access.ts`, #10), which is the
+load-bearing control in the whole design rather than hygiene on top of it:
+
+- **The gate reads `ctx.access`, never a header.** Access Managed OAuth issues
+  the *client* an opaque token (`oauth:...`) only Access can verify, exchanges
+  it at the edge, and hands the worker the result as `ctx.access`. It also still
+  forwards a signed JWT in `Cf-Access-Jwt-Assertion`, and verifying that instead
+  would be the weaker choice, not merely the older one: a header is request
+  data, trustworthy only while nothing can reach this worker without traversing
+  Access. `ctx.access` is set by the runtime, cannot be spoofed by a caller, and
+  is absent exactly when Access did not run — so the gate fails closed by
+  construction rather than by remembering to.
+- **The Access application's destination is the Worker, not a hostname.**
+  Cloudflare calls attaching the Worker the safest way to gate one, and it is
+  the reason `workers_dev: false` is now defence in depth rather than the only
+  thing holding the line: worker-level Access covers every route, Custom Domain
+  and `workers.dev` URL at once. Confirmed against the deployed instance — a
+  request to `/`, a path this worker answers 404 on, comes back 401 from the
+  edge instead. That is the cheapest way to tell a Worker destination from a
+  hostname one. It also inverts the setup order — you cannot
+  attach a Worker that does not exist, so both workers are deployed (routeless,
+  and answering 500 without an audience) before the application is created. The
+  one constraint it carries: worker-level Access does not support WebSockets.
+  MCP Streamable HTTP is POST + SSE, so that is free today — but a tool that
+  reached for WebSockets would have to move back to a hostname destination.
+- **`aud` is still checked, and that is the whole of the security decision.**
+  Access authenticating *someone* is not the claim that matters; one Zero Trust
+  account holds many applications and another one's policy may be far more
+  generous than this one's. A test proves it: stub the comparison out and a
+  caller authenticated for `another-application` walks in.
+- **Absent configuration is a 500, never a pass and never a 401.** A 401 would
+  invite a client into an OAuth flow that cannot succeed; a 403 would claim a
+  correct credential was rejected and send the deployer to edit the wrong thing.
+  What must never happen is the third option. `readAccessConfig` returns an
+  outcome rather than throwing, matching `SearchOutcome` in `src/search.ts`, so
+  the failure cannot be walked past by forgetting a `catch`.
+- **The refusal is a `401` with a `WWW-Authenticate` challenge, never a
+  redirect.** That is what makes an MCP client run the OAuth flow instead of
+  rendering a login page it cannot complete, and it is why Managed OAuth has to
+  be switched on — default Access answers a non-browser client with a `302`.
+  The challenge is built by the SDK's `bearerAuthChallengeResponse`, so the
+  header is the spec's rather than this repo's guess at it.
+- **The order in `fetch` is discovery → 404 → Origin → Access, and the Origin
+  step is not swappable.** A DNS-rebound browser request carries the victim's
+  Access cookie, so Access genuinely authenticates it and the gate *passes*.
+  Origin is the only thing that stops it, so being signed in must never be a way
+  past it.
+- **`/.well-known/oauth-protected-resource` is served unauthenticated, ahead of
+  everything.** The MCP authorization spec makes RFC 9728 metadata a MUST, and
+  the `resource_metadata` pointer in this worker's own 401 has to lead
+  somewhere — otherwise the one case where that 401 fires is the case where its
+  pointer hits the 404. Measured against the deployed instance rather than
+  assumed: Access serves both its own
+  `/.well-known/cloudflare-access-protected-resource` and the standard RFC 9728
+  path, so in production the edge answers first and this copy is never reached.
+  Its audience is the backstop and `wrangler dev`.
+- **`handleRequest` is exported, and the tests call it rather than `SELF`.**
+  Not a preference: `SELF` from `cloudflare:test` is a service binding, and
+  Cloudflare documents that Access deliberately does not propagate `ctx.access`
+  across one, so no request made through `SELF.fetch` can ever arrive
+  authenticated. `SELF` still covers the unauthenticated path, which is what it
+  can honestly prove. The cost is real and worth stating: whether Cloudflare
+  populates `ctx.access` for this deployment is the one step no test can
+  exercise, so the authenticated post-deploy check in docs/access.md is not
+  optional.
+- **`wrangler dev` answers 401 to everything until `.env` carries an audience,
+  and that is correct.** Access is not in front of a local worker, so
+  `ctx.access` is undefined. `wrangler dev` follows the same redirect `deploy`
+  does, so `scripts/deploy-config.mjs` emits an `access.dev` block into the
+  generated config when `ACCESS_AUD` is set — which is the only way to simulate
+  a signed-in caller without editing a committed file.

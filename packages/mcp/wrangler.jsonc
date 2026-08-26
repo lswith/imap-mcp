@@ -20,12 +20,19 @@
   },
   "upload_source_maps": true,
   // No route is declared, and workers_dev + preview_urls are both false, so a
-  // deploy of this worker is not reachable from the internet at all. That is
-  // deliberate and load-bearing: with no folder fence, this endpoint is
-  // functionally read access to the entire mailbox, so it must not become
-  // reachable before Cloudflare Access sits in front of it
-  // (#10). Without workers_dev: false it would be live at
-  // <name>.<account>.workers.dev regardless of any route or Access policy.
+  // deploy of this worker is not reachable from the internet at all.
+  //
+  // Since #10 that is the second of two independent layers rather than the only
+  // one. The worker reads `ctx.access` (src/access.ts) and answers anything the
+  // Cloudflare Access runtime did not authenticate for this application with a
+  // 401 — so a route added without an Access application in front of it is a
+  // dead endpoint rather than an open mailbox. Both layers stay: deleting the
+  // Access application must not silently open this, and neither must adding a
+  // route.
+  //
+  // Without workers_dev: false the worker would be live at
+  // <name>.<account>.workers.dev regardless of any route or Access policy — and
+  // that hostname is not one an Access application covers.
   "workers_dev": false,
   "preview_urls": false,
   // The index both workers share. One database: the sync worker writes it, the
@@ -55,8 +62,15 @@
   //
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
-  //   routes      -- your own zone; see MCP_ZONE_NAME in ../../.env.example
-  //   vars        -- ACCESS_TEAM_DOMAIN / ACCESS_AUD (#10)
+  //   routes      -- your own zone; see MCP_ZONE_NAME in ../../.env.example.
+  //                  Create the Access application FIRST, then the route: a
+  //                  route that exists before it answers 401 to everyone,
+  //                  including you.
+  //   vars        -- ACCESS_AUD, required. Its shape is declared in
+  //                  src/env.d.ts, the way packages/sync declares its own; the
+  //                  value is yours and is added here at deploy time. Without
+  //                  it the worker answers 500 rather than falling open. See
+  //                  ../../docs/access.md.
   //   r2_buckets  -- #9
   //   services    -- binding to imap-mcp-sync for writes (#12)
   //

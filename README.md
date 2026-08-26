@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) and the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 through a queue, and the MCP server serves `search_messages` over that index. Nothing is authenticated yet, so the MCP worker has no route until Access lands ([#10](https://github.com/lswith/imap-mcp/issues/10)). See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)) and the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 through a queue, and the MCP server serves `search_messages` over that index to callers Cloudflare Access has authenticated. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -62,8 +62,8 @@ Everything you would need to supply is named and explained in [`.env.example`](.
 | What | Where it goes |
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | your environment; wrangler reads it directly |
-| Route / zone for the MCP worker | a `routes` entry you add to `packages/mcp/wrangler.jsonc` |
-| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | `vars` in `packages/mcp/wrangler.jsonc` |
+| Route / zone for the MCP worker | `MCP_ROUTE_PATTERN` in your `.env`; generated into the deploy config |
+| `ACCESS_AUD` | your `.env`; generated into a gitignored wrangler config at deploy time. **Required** — the worker answers `500` without it |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in `packages/sync/wrangler.jsonc` |
 | `SYNC_FOLDERS` and the four sizing vars | `vars` in `packages/sync/wrangler.jsonc`; all optional |
 | `IMAP_PASSWORD` | `wrangler secret put`, sync worker only — never a `vars` entry |
@@ -74,9 +74,27 @@ Locally, secrets go in a gitignored `.dev.vars` per package; each has a `.dev.va
 
 ### Both workers are unreachable by default
 
-`workers_dev` and `preview_urls` are `false` in both `wrangler.jsonc` files, and the MCP worker declares no route. A fresh deploy is therefore not reachable from the internet. This is deliberate: with no folder fence, the MCP endpoint is functionally read access to an entire mailbox, so it must not become reachable before Cloudflare Access is in front of it. Without `workers_dev: false` a worker is live at `<name>.<account>.workers.dev` no matter what routes or Access policies exist.
+`workers_dev` and `preview_urls` are `false` in both `wrangler.jsonc` files, and the MCP worker declares no route. A fresh deploy is therefore not reachable from the internet. Without `workers_dev: false` a worker is live at `<name>.<account>.workers.dev` no matter what routes or Access policies exist — and that hostname is not one an Access application covers.
 
-A full deploy-from-scratch guide — secrets, Access setup, bindings, migrations and the backfill — is not written yet; it lands with the rest of the system.
+### How the MCP endpoint is authenticated
+
+Unreachable and unauthenticated are two independent layers here, deliberately. Deleting the Access application does not silently open the endpoint, and neither does adding a route: **the worker checks Access itself** ([`packages/mcp/src/access.ts`](./packages/mcp/src/access.ts)) and answers anything Access did not authenticate for this application with a `401`.
+
+The mechanism is Access **Managed OAuth**. Default Access answers a non-browser client with a `302` to a login page it cannot complete, which is simply a broken connection for every MCP client; Managed OAuth turns that into a spec-compliant `401` carrying a `WWW-Authenticate` header that points at the OAuth discovery endpoints, and the client runs an authorization-code flow in the user's browser.
+
+Access is attached to the **Worker**, not to a hostname, so it covers every route, Custom Domain and `workers.dev` URL the Worker ever has rather than one exact URL. That makes `workers_dev: false` defence in depth rather than the only thing holding the line — and it is why the workers are deployed *before* the Access application exists, since you cannot attach a Worker that does not.
+
+One detail of it shapes the implementation. The token the **client** ends up holding is *opaque* (`oauth:…`) and cannot be verified by anyone but Access — the worker never sees it. What the worker sees is [`ctx.access`](https://developers.cloudflare.com/workers/configuration/cloudflare-access/), which the Workers runtime populates for a request Access authenticated.
+
+Reading the runtime rather than a header is the stronger of the two options, not merely the newer one. A header is request data, trustworthy only for as long as nothing can reach the worker without traversing Access; `ctx.access` cannot be spoofed by a caller at all, and is simply absent when Access did not run — so the gate closes on exactly the case a header check would have to reason about.
+
+What it still has to check is the **audience**: `ctx.access.aud` must match this application's tag. Access authenticating *someone* is not the same claim as Access authenticating them for *this* application, and one Zero Trust account can hold many — another of which may have a far more generous policy.
+
+Missing configuration fails closed: with `ACCESS_AUD` unset the worker answers `500`, never an unauthenticated `200`.
+
+[`docs/access.md`](./docs/access.md) is the setup guide, and [`scripts/setup-access.sh`](./scripts/setup-access.sh) walks it interactively. Note that the MCP worker is not deployed on its own: `imap-mcp-sync` goes first, because it provisions the D1 database both workers share — see [First deploy](#first-deploy). A full deploy-from-scratch guide — secrets, bindings, migrations and the backfill — is [#13](https://github.com/lswith/imap-mcp/issues/13); the Access half is written.
+
+**No committed file is edited to deploy.** `pnpm run deploy` runs [`scripts/deploy-config.mjs`](./scripts/deploy-config.mjs) first, which merges your `.env` into a copy of the committed `wrangler.jsonc` and writes it under the gitignored `.wrangler/`, using wrangler's [redirected configuration](https://developers.cloudflare.com/workers/wrangler/configuration/). The audience tag, the route and the `database_id` wrangler writes back therefore all stay out of git — "nothing deployment-specific is committed" becomes a mechanism rather than a promise, and no private fork is needed to run this against your own account. With no `.env` the script no-ops and wrangler reads the committed config, exactly as a fresh clone does.
 
 ## Storage
 
@@ -251,7 +269,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` — *done* |
 | [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` — *done* |
 | [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction |
-| [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth |
+| [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth — *done* |
 | [#11](https://github.com/lswith/imap-mcp/issues/11) | `get_message` and `get_thread` |
 | [#12](https://github.com/lswith/imap-mcp/issues/12) | Write tools over a service binding, with an audit log |
 | [#13](https://github.com/lswith/imap-mcp/issues/13) | Full backfill and setup guide |

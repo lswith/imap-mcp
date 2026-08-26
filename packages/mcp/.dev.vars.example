@@ -2,5 +2,24 @@
 #
 # This worker deliberately holds no IMAP credential — the sync worker owns it,
 # and writes reach that worker over a service binding (#12).
-# Nothing here yet; the file exists so the pattern is obvious when Access
-# configuration lands (#10).
+#
+# There is nothing to put here for Cloudflare Access either. The gate reads
+# `ctx.access`, which the runtime populates and no file can, and the one value
+# it compares against — ACCESS_AUD — lives in the repo-root `.env` rather than
+# here. This file stays as the place a real secret would go.
+
+# Worth knowing before you reach for `wrangler dev`:
+#
+# Access is not in front of a local worker, so `ctx.access` is undefined and
+# every local request is answered 401. That is the gate failing closed, not a
+# bug.
+#
+# To drive the tools locally as an authenticated caller, put ACCESS_AUD in the
+# repo-root `.env` and run `pnpm run dev`. `wrangler dev` follows the same
+# redirected configuration `deploy` does, so scripts/deploy-config.mjs will have
+# written an `access.dev` block into the generated config — which is what makes
+# `ctx.access` appear locally without editing a committed file. Set
+# ACCESS_DEV_EMAIL in `.env` to choose the identity it simulates.
+#
+# Most work on the MCP tools happens through `pnpm run test` / `test:watch`
+# instead, which drive the handler directly.

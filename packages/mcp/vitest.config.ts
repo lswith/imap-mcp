@@ -6,6 +6,11 @@ import { defineConfig } from "vitest/config";
 // exact SQL `wrangler d1 migrations apply` would run.
 const migrations = await readD1Migrations(new URL("../../migrations", import.meta.url).pathname);
 
+// The Access application's audience tag, as a deploy would supply it. Matches
+// test/support/access.ts. A fictional value: nothing account-specific is
+// committed, and this repository is public.
+const TEST_AUD = "0d3ad0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d";
+
 // Tests run inside workerd (the real Worker runtime) against this package's
 // own wrangler.jsonc, so the compatibility flags and bindings
 // under test are the same ones that get deployed.
@@ -13,8 +18,16 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
-      // A test-only binding: the setup file applies these to env.DB.
-      miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+      miniflare: {
+        bindings: {
+          // Test-only: the setup file applies these to env.DB.
+          TEST_MIGRATIONS: migrations,
+          // The Access `var` a deployer adds. wrangler.jsonc commits none —
+          // this repository is public — so the suite supplies it the same way a
+          // deploy does. src/env.d.ts is where its shape is declared.
+          ACCESS_AUD: TEST_AUD,
+        },
+      },
     }),
   ],
   test: {
