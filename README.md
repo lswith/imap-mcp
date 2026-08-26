@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) attachments ([#9](https://github.com/lswith/imap-mcp/issues/9)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)), the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)) and the write tools ([#12](https://github.com/lswith/imap-mcp/issues/12)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 and R2 through a queue, and the MCP server serves `search_messages` over that index to callers Cloudflare Access has authenticated, plus three write tools it proxies back to the sync worker. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) attachments ([#9](https://github.com/lswith/imap-mcp/issues/9)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)), the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)), the retrieval tools ([#11](https://github.com/lswith/imap-mcp/issues/11)) and the write tools ([#12](https://github.com/lswith/imap-mcp/issues/12)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 and R2 through a queue, and the MCP server serves `search_messages`, `get_message` and `get_thread` over that index to callers Cloudflare Access has authenticated — bodies one message at a time, by id — plus three write tools it proxies back to the sync worker. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -338,6 +338,56 @@ zero-width spaces, bidi overrides, the Unicode tag block — are stripped, after
 character references are decoded rather than before, so that a zero-width space
 written as `&#8203;` is caught too.
 
+## What the MCP server does
+
+Three read tools, meant to be used in that order: `search_messages` finds
+candidates, `get_thread` shows the conversation one of them sits in, and
+`get_message` reads the ones that turn out to matter. All three read D1 and
+nothing else — no IMAP connection, no mailbox credential, no live mailbox in the
+serving path.
+
+The ordering is the design rather than a suggestion. Every subject, snippet and
+body in this database was written by whoever sent the mail, which is to say by
+anyone, and it sits one tool call away from the write tools ([#12](https://github.com/lswith/imap-mcp/issues/12)).
+So **bodies leave one at a time, by an id the caller had to be given**: search
+returns snippets and never a body, a thread returns identity and an
+800-character preview per message and never a body, and `get_message` returns
+exactly one, truncated at 16 000 characters. None of those caps is a parameter,
+and neither retrieval tool takes an offset — paging would be a second way to
+reassemble in bulk what the cap just refused.
+
+Everything message-derived is returned inside a marked envelope, and the
+closing tag carries a **nonce drawn fresh per response**. A fixed delimiter is a
+fixed string and a subject written months ago can contain it; a nonce cannot be
+known when the message was sent, so the closing tag is the one part of the
+output an author cannot produce. It is also drawn against the text it is about
+to frame and redrawn on collision, which is cheap and removes the last
+"astronomically unlikely" from the argument. What that buys is an honest
+boundary — not immunity to the instructions inside it, which is the warning's
+job and ultimately the model's.
+
+Subjects, snippets, previews and filenames are collapsed to one line, because
+those are rendered as list rows and a newline would let a message add rows to
+the list it appears in. A body is not a row — it is one region between two tags,
+so there is nothing for a newline to forge and collapsing it would make the tool
+useless. Serving one at all is only defensible because the body was normalised
+at index time: the HTML is already reduced, hidden elements dropped, and
+zero-width and bidi characters stripped.
+
+**Threads are reconstructed here, not asked for.** There is no `thread_id` and
+no IMAP `THREAD` command in the picture: a conversation is derived from
+Message-ID, In-Reply-To and References. RFC 5322 makes a conformant reply carry
+its parent's whole ancestry, so one query reaches ancestors, siblings and
+descendants at once. When those headers link nothing at all — plenty of clients
+strip them — the answer is the message you asked for and a note saying why:
+no message names it and none is named by it, and mail from such a client cannot
+be threaded from this index. There was a subject-matching fallback here and it
+was removed rather than repaired. It could not be made correct — the exact
+comparison has to happen outside SQL, so the query that narrowed always let
+through subjects the comparison would reject, and anything a row limit cut was
+never compared at all — and what it bought was a grouping that had to describe
+itself as a guess. A short answer that is true beats a long one that might be.
+
 ## Roadmap
 
 Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
@@ -353,7 +403,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` — *done* |
 | [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction — *done* |
 | [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth — *done* |
-| [#11](https://github.com/lswith/imap-mcp/issues/11) | `get_message` and `get_thread` |
+| [#11](https://github.com/lswith/imap-mcp/issues/11) | `get_message` and `get_thread` — *done* |
 | [#12](https://github.com/lswith/imap-mcp/issues/12) | Write tools over a service binding, with an audit log — *done* |
 | [#13](https://github.com/lswith/imap-mcp/issues/13) | Full backfill and setup guide |
 | [#24](https://github.com/lswith/imap-mcp/issues/24) | Flag reconciliation over CONDSTORE |

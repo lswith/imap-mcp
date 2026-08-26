@@ -234,7 +234,7 @@ describe("create_draft", () => {
     const id = await seedMessage({
       subject: "Quarterly invoice",
       rfcMessageId: "<abc@example.invalid>",
-      references: ["<root@example.invalid>"],
+      referenceIds: ["<root@example.invalid>"],
     });
     const writer = new FakeWriter();
 
