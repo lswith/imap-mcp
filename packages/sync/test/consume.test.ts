@@ -11,6 +11,7 @@ import {
   FakeMailbox,
   fakeAttachment,
   fakeMessage,
+  firstDifference,
 } from "./support/fake-mailbox";
 
 // The consumer half of #6: one uid range, one connection, upserted into D1.
@@ -512,7 +513,9 @@ describe("attachments (#9)", () => {
 
     expect(result).toMatchObject({ stored: 1, attachments: 3, oversize: 0 });
     const object = await env.ATTACHMENTS.get(`att/${id}/100/1/1`);
-    expect(new Uint8Array(await object!.arrayBuffer())).toEqual(big);
+    const stored = new Uint8Array(await object!.arrayBuffer());
+    expect(stored.length).toBe(big.length);
+    expect(firstDifference(stored, big)).toBe(-1);
     expect(await storedAttachments()).toMatchObject([
       { partIndex: 0, extractedText: "agenda" },
       { partIndex: 1, sizeBytes: big.length, extractedText: null },

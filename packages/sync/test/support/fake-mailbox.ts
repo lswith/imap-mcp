@@ -262,6 +262,22 @@ export function attachmentOf(
   return fakeAttachment({ size: bytes.length, contentBase64: btoa(binary), ...overrides });
 }
 
+/**
+ * The index of the first byte where two buffers differ, or -1 if they match.
+ *
+ * `expect(a).toEqual(b)` on a multi-megabyte Uint8Array is unusable: vitest
+ * walks it element by element, which costs seconds for a 3 MB attachment and
+ * prints a diff nobody can read. One pass is ~700x faster and says WHERE the
+ * round-trip broke, which is the only thing a failure here needs to tell you.
+ */
+export function firstDifference(actual: Uint8Array, expected: Uint8Array): number {
+  if (actual.length !== expected.length) return Math.min(actual.length, expected.length);
+  for (let index = 0; index < actual.length; index++) {
+    if (actual[index] !== expected[index]) return index;
+  }
+  return -1;
+}
+
 /** `length` bytes of deterministic, non-text content — a stand-in for a PDF. */
 export function bytesOfLength(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
