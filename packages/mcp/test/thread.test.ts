@@ -428,6 +428,30 @@ describe("getThread", () => {
       expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
     });
 
+    it("is not starved by labelled subjects that end with the seed's", async () => {
+      // "URGENT: Report from operations" clears the colon anchor and is still a
+      // different subject. Narrowing the prefilter again would only move this
+      // decoy's shape; what has to stop being true is that SQL's cut decides
+      // which rows the exact check gets to see.
+      const at = Date.parse("2026-03-10T09:00:00Z");
+      const first = await seedMessage({ subject: "Report from operations", internalDate: at });
+      const reply = await seedMessage({
+        subject: "Re: Report from operations",
+        internalDate: at - 60_000,
+      });
+      for (let n = 0; n < 220; n++) {
+        await seedMessage({
+          subject: `URGENT${n}: Report from operations`,
+          internalDate: at + (n + 1) * 60_000,
+        });
+      }
+
+      const found = await thread(first);
+
+      expect(found.messages.map((message) => message.id)).toEqual([reply, first]);
+      expect(found.truncated).toBe(false);
+    });
+
     it("says so when the prefilter itself ran out of room", async () => {
       // Distinct from the result cap being reached: rows were dropped before
       // anything judged them, so members may be missing that would have been

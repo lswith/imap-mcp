@@ -46,14 +46,15 @@ const MIN_SUBJECT_CHARS = 8;
 export const SUBJECT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * How many rows the subject prefilter may return before TypeScript judges them.
+ * A runaway guard on the scan, not a result limit.
  *
- * Deliberately larger than the number that can be *kept*, because these two
- * limits answer different questions. The result cap bounds what reaches a
- * model; this one bounds what the exact check gets to look at, and setting them
- * equal is what let unrelated newer mail decide the outcome by arriving first.
+ * The scan reads two short columns, so it can afford to be wide — and it has to
+ * be, because a limit small enough to matter is a limit that decides which
+ * rows the exact check sees. This number exists so a pathological window cannot
+ * read without bound; reaching it is reported as truncation rather than passed
+ * off as a finished search.
  */
-export const SUBJECT_CANDIDATES = MAX_THREAD_MESSAGES * 4;
+export const SUBJECT_CANDIDATES = 500;
 
 /**
  * How the messages were decided to belong together.
@@ -175,39 +176,41 @@ const HEADER_PASS = `
 /**
  * The fallback: same normalised subject, near the same time.
  *
- * SQL narrows and TypeScript decides — but the narrowing has to be tight, not
- * merely correct, because the SQL limit cuts the candidate set *before* the
- * exact check runs. A superset test like `instr(lower(subject), needle) > 0`
- * matched "Re: X", "Fwd: Re: X" and the unrelated "X — daily digest 47" alike,
- * so fifty newer digests could fill the limit and the genuine reply would never
- * be judged at all: the conversation would come back missing members, or with
- * the seed reported as alone.
+ * SQL narrows and TypeScript decides — and the shape below exists because
+ * those two sentences were not actually true of each other. While the
+ * candidate query carried both the previews and the row limit, whatever it cut
+ * was never judged: any subject its prefilter admitted and the exact check
+ * rejected was a slot a genuine older reply could have had. Three rounds of
+ * tightening the prefilter each moved the decoy's shape rather than removing
+ * it — "X — daily digest 47", then "Weekly X", then "URGENT: X" — because no
+ * expression SQLite can write is `normaliseSubject`, and anything short of it
+ * admits *something* the check will reject.
  *
- * So the test is **anchored at the end, against a colon**. Everything
- * normalisation removes — `Re:`, `Fwd:`, `Re[2]:` — is a prefix, and every one
- * of them ends in a colon, so an exact match's key is either the needle itself
- * or a colon followed by it. Anchoring only at the end was not enough: "Weekly
- * report from operations" ends with "reportfromoperations" too, and enough
- * subjects like it fill the candidate limit and starve the genuine reply just
- * as the unanchored test did. It is still `=` against a `substr`, never `LIKE`,
- * so there is no pattern language for a subject to smuggle a wildcard through:
- * `_` is common in real subjects.
+ * So the limit no longer decides. The scan below reads identity and subject
+ * only — no previews, so a wide read is cheap — TypeScript filters it exactly,
+ * and only the rows that survived are fetched in full. A decoy can now cost a
+ * row in the scan; it cannot cost a genuine reply its place.
  *
- * Whitespace is then removed from both sides rather than collapsed, because
- * normalisation collapses it and the prefilter has to agree with the check that
- * decides — otherwise "Re:  Report   from operations" is thrown away before
- * anything judges it. Removing rather than collapsing because SQLite has no
- * regex to collapse with; and every character `\s` matches rather than the
- * four obvious ones, because a subject carrying a non-breaking space is the
- * same subject to the check that decides. See `SUBJECT_WHITESPACE`.
+ * What is left for SQL is a **superset test**, and that is all it has to be:
+ * everything normalisation strips is a reply prefix ending in a colon, so an
+ * exact match's key is either the needle itself or a colon followed by it.
+ * Admitting more than that is now merely wasteful. It is still `=` against a
+ * `substr`, never `LIKE`, so there is no pattern language for a subject to
+ * smuggle a wildcard through: `_` is common in real subjects.
  *
- * One imprecision remains, and it can only cause a miss, never a false include,
- * because TypeScript is what decides: **SQLite's `lower()` is ASCII-only**, so
- * two subjects differing only in the case of a non-ASCII letter are invisible
- * to each other here. workerd exposes no Unicode-aware fold to reach for, so
- * the fix is a normalised-subject column written at index time — a schema
- * change and a backfill, and therefore its own ticket. A test pins the
- * behaviour so it is a known limit rather than a surprise.
+ * Whitespace is removed from both sides rather than collapsed, because
+ * normalisation collapses it and a prefilter that disagreed would drop
+ * "Re:  Report   from operations" before anything judged it. Removing rather
+ * than collapsing because SQLite has no regex to collapse with, and every
+ * character `\s` matches rather than the four obvious ones — see
+ * `SUBJECT_WHITESPACE`.
+ *
+ * One imprecision remains, and it can only cause a miss, never a false
+ * include, because TypeScript is what decides: **SQLite's `lower()` is
+ * ASCII-only**, so two subjects differing only in the case of a non-ASCII
+ * letter are invisible to each other here. workerd exposes no Unicode-aware
+ * fold, so the fix is a normalised-subject column written at index time — a
+ * schema change and a backfill, and therefore its own ticket. A test pins it.
  */
 
 /**
@@ -218,14 +221,12 @@ const HEADER_PASS = `
  * compared against. Writing it out matters because the two halves run in
  * different languages — `normaliseSubject` collapses `\s`, which is 25
  * characters including the non-breaking space and the en and em spaces, while
- * SQLite has no character class at all. A prefilter that removed only the four
- * obvious ASCII ones would discard a subject carrying a non-breaking space
- * before the check that would have accepted it ever ran.
+ * SQLite has no character class at all.
  *
  * A test scans the BMP and asserts this list is exactly what `\s` matches, so
  * "these agree" is proved rather than intended. Index-time stripping does not
- * help here: a non-breaking space is legitimate text, so `stripInvisible`
- * rightly leaves it in the subject it stores.
+ * help: a non-breaking space is legitimate text, so `stripInvisible` rightly
+ * leaves it in the subject it stores.
  */
 export const SUBJECT_WHITESPACE = [
   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005,
@@ -234,7 +235,7 @@ export const SUBJECT_WHITESPACE = [
 
 /**
  * The subject reduced to what a comparison should see: lowercased as far as
- * SQLite can, with every one of those characters removed.
+ * SQLite can, with every whitespace character removed.
  *
  * Generated rather than written out, because twenty-five nested `replace()`
  * calls are not something to keep correct by hand — and because generating it
@@ -245,23 +246,24 @@ const SUBJECT_KEY = SUBJECT_WHITESPACE.reduce(
   (expression, code) => `replace(${expression}, char(${code}), '')`,
   "lower(m.subject)",
 );
-const SUBJECT_PASS = `
-  SELECT ${PREVIEW_COLUMNS}
+const SUBJECT_SCAN = `
+  SELECT m.id, m.subject
   FROM messages m
   JOIN folders f ON f.id = m.folder_id
   WHERE ${GENERATION_GUARD}
     AND m.internal_date BETWEEN ?1 AND ?2
-    -- Ending with the seed's key is not enough: "Weekly report from operations"
-    -- ends with "reportfromoperations" and is a different subject. What makes
-    -- the difference is what sits in front. Everything normalisation strips is
-    -- a reply prefix, and every reply prefix ends in a colon — so an exact
-    -- match's key is either the needle itself or a colon followed by it.
-    -- Without this, enough such decoys fill the candidate limit and the genuine
-    -- older reply is discarded before the exact check ever sees it.
     AND ( ${SUBJECT_KEY} = ?3
        OR substr(${SUBJECT_KEY}, -(length(?3) + 1)) = ':' || ?3 )
   ORDER BY m.internal_date DESC, m.id DESC
   LIMIT ?4`;
+
+/** The full rows, for the handful of ids that survived the exact check. */
+const PREVIEWS_BY_ID = `
+  SELECT ${PREVIEW_COLUMNS}
+  FROM messages m
+  JOIN folders f ON f.id = m.folder_id
+  WHERE m.id IN (SELECT value FROM json_each(?1))
+  ORDER BY m.internal_date DESC, m.id DESC`;
 
 export async function getThread(db: D1Database, input: { id: number }): Promise<ThreadOutcome> {
   const seeded: MessageOutcome<ThreadPreview> = await loadSeed(db, input.id);
@@ -352,18 +354,37 @@ async function subjectPass(
   seed: ThreadPreview,
   subject: string,
 ): Promise<{ rows: PreviewRow[]; cut: boolean }> {
-  const { results } = await db
-    .prepare(SUBJECT_PASS)
+  // Identity and subject only. This is the read that has to be allowed to be
+  // wide, so it carries nothing wide: no body preview, no address lists.
+  const { results: scanned } = await db
+    .prepare(SUBJECT_SCAN)
     .bind(
       seed.internalDate - SUBJECT_WINDOW_MS,
       seed.internalDate + SUBJECT_WINDOW_MS,
       subjectKey(subject),
       SUBJECT_CANDIDATES,
     )
+    .all<{ id: number; subject: string }>();
+
+  // The decision, and the only one. Everything above it was narrowing.
+  const matched = scanned.filter((row) => normaliseSubject(row.subject) === subject);
+  // Ordered newest first by the scan, so this keeps the recent end of a
+  // conversation — the end worth keeping when there is more than fits.
+  const wanted = matched.slice(0, MAX_THREAD_MESSAGES);
+
+  // No empty-set guard: the seed's own row matches its own subject exactly, so
+  // this list always holds at least it. An empty json_each would be harmless
+  // anyway, but a branch nothing can reach is worse than the query it avoids.
+  const { results } = await db
+    .prepare(PREVIEWS_BY_ID)
+    .bind(JSON.stringify(wanted.map((row) => row.id)))
     .all<PreviewRow>();
 
   return {
-    rows: results.filter((row) => normaliseSubject(row.subject) === subject),
-    cut: results.length === SUBJECT_CANDIDATES,
+    rows: results,
+    // Two different ways to have left something out, and both are the same
+    // thing to a reader: the scan hit its guard, or more subjects matched than
+    // a thread may carry.
+    cut: scanned.length === SUBJECT_CANDIDATES || matched.length > wanted.length,
   };
 }

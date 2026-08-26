@@ -314,36 +314,28 @@ model is decided:
   and exact equality on the normalised subject re-checked in TypeScript. It has
   no cryptographic tie between the messages it groups, so the note after the
   closing tag says outright that the grouping is a guess.
-- **SQL narrows and TypeScript decides — so the narrowing has to agree with the
-  check that decides, in both directions.** The limit cuts the candidate set
-  *before* the exact check runs, which makes both a loose prefilter and a strict
-  one a way to get the wrong answer. Too loose starves it: with
-  `instr(lower(subject), ?)`, fifty newer "X — daily digest 47" subjects could
-  fill the limit and the genuine reply would never be judged. Too strict drops
-  members outright: a prefilter that cared about spacing threw away
-  "Re:  Report   from operations", which normalisation plainly makes the same
-  subject. So the test is **anchored at the end against a colon, and blind to
-  whitespace** — everything normalisation strips is a *prefix* ending in a
-  colon, so an exact match's key is either the needle itself or a colon
-  followed by it, and whitespace is removed from both sides because SQLite has
-  no regex to collapse it with. Anchoring at the end alone was not enough:
-  "Weekly report from operations" ends with the same key, and enough subjects
-  like it starve the genuine reply exactly as an unanchored test did. "Whitespace" there means
-  every character JavaScript's `\s` matches — twenty-five of them, including
-  the non-breaking space and the en and em spaces, not the four obvious ASCII
-  ones — because that is what `normaliseSubject` collapses. Both halves are
-  generated from one exported list (`SUBJECT_WHITESPACE`), and a test scans the
-  BMP to prove the list is exactly what `\s` matches, so the two sides agree by
-  construction rather than by review. Still `=` against a `substr`
-  and never `LIKE`: `_` is a wildcard and is common in real subjects. The
-  candidate limit is deliberately larger than the result cap — the two answer
-  different questions, one bounding what reaches a model and the other what the
-  exact check may look at — and when the prefilter is what ran out of room, the
-  answer reports it. Reporting it is also why "nothing else belongs to this
-  conversation" is not said when the candidate search was cut short: that
-  sentence is a claim, available only when the looking actually finished, and
-  pairing it with a truncation note would tell a reader two incompatible things
-  and invite it to believe the reassuring one.
+- **SQL narrows and TypeScript decides, and the subject fallback is shaped so
+  that is actually true.** While one query carried both the previews and the row
+  limit, whatever the limit cut was never judged — so any subject the prefilter
+  admitted and the exact check rejected was a slot a genuine older reply could
+  have had. Three rounds of tightening the prefilter each moved the decoy's
+  shape rather than removing it ("X — daily digest 47", "Weekly X", "URGENT: X"),
+  because no expression SQLite can write *is* `normaliseSubject`, and anything
+  short of it admits something the check will reject. So the limit no longer
+  decides: a scan reads identity and subject only — cheap enough to be wide —
+  TypeScript filters it exactly, and only the survivors are fetched in full. A
+  decoy costs a row in the scan; it cannot cost a genuine reply its place.
+- **What is left for SQL is a superset test, and that is all it has to be.**
+  Everything normalisation strips is a reply prefix ending in a colon, so an
+  exact match's key is either the needle itself or a colon followed by it.
+  Whitespace is removed from both sides rather than collapsed — SQLite has no
+  regex to collapse with — and it is every character `\s` matches rather than
+  the four obvious ASCII ones, generated with the needle from one exported list
+  (`SUBJECT_WHITESPACE`) whose completeness a BMP scan pins. The scan's own
+  limit is a runaway guard rather than a result cap, and reaching it is reported
+  as truncation rather than passed off as a finished search — as is
+  "nothing else belongs to this conversation", which is a claim available only
+  when the looking actually finished.
 - **The one subject difference the prefilter cannot see is non-ASCII case**,
   because SQLite's `lower()` is ASCII-only and workerd exposes no Unicode-aware
   fold. It can only cause a miss, never a false include. Pinned by a test rather
