@@ -121,6 +121,7 @@ function record(overrides: Partial<MessageRecord> = {}): MessageRecord {
     sizeBytes: 4096,
     body: "the shipment arrives Tuesday\n\nregards\nAlice",
     bodyChars: 42,
+    oversize: false,
     attachments: [],
     ...overrides,
   };
@@ -235,7 +236,7 @@ describe("renderMessage", () => {
   it("does not claim there are no attachments when it simply cannot see them", () => {
     const rendered = renderMessage(record({ hasAttachments: true }));
 
-    expect(rendered).toMatch(/not yet indexed/i);
+    expect(rendered).toMatch(/not indexed for this message/i);
     expect(rendered).not.toMatch(/attachments: none/i);
   });
 
@@ -319,6 +320,21 @@ describe("renderMessage", () => {
 
     expect(claimed).toMatch(/claim/i);
     expect(agreeing).not.toMatch(/claim/i);
+  });
+
+  it("says a message was too large to fetch rather than that it was empty", () => {
+    const rendered = renderMessage(
+      record({ oversize: true, body: null, bodyChars: 0, hasAttachments: true }),
+    );
+
+    expect(rendered).toMatch(/too large/i);
+    expect(rendered).not.toMatch(/indexed with no body/i);
+    // Its attachments were never fetched either, so nothing may imply a count
+    // — and it must not borrow the wording for a message that simply predates
+    // attachment indexing, because re-indexing this one would not help.
+    expect(rendered).toMatch(/attachments: unknown/i);
+    expect(rendered).not.toMatch(/attachments: none/i);
+    expect(rendered).not.toMatch(/not indexed for this message/i);
   });
 
   it("says so plainly when a message was indexed with no body", () => {

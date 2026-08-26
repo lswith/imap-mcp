@@ -4,7 +4,7 @@
 
 It is generic by design rather than by ambition — host, port and credentials are configuration, not constants — so it should work against any IMAP server. Only iCloud is actually exercised.
 
-> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)), the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)) and the retrieval tools ([#11](https://github.com/lswith/imap-mcp/issues/11)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 through a queue, and the MCP server serves `search_messages`, `get_message` and `get_thread` over that index to callers Cloudflare Access has authenticated — bodies one message at a time, by id. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
+> **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) attachments ([#9](https://github.com/lswith/imap-mcp/issues/9)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)), the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)) and the retrieval tools ([#11](https://github.com/lswith/imap-mcp/issues/11)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 and R2 through a queue, and the MCP server serves `search_messages`, `get_message` and `get_thread` over that index to callers Cloudflare Access has authenticated — bodies one message at a time, by id. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
 
 ## What it does
 
@@ -65,9 +65,9 @@ Everything you would need to supply is named and explained in [`.env.example`](.
 | Route / zone for the MCP worker | `MCP_ROUTE_PATTERN` in your `.env`; generated into the deploy config |
 | `ACCESS_AUD` | your `.env`; generated into a gitignored wrangler config at deploy time. **Required** — the worker answers `500` without it |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in `packages/sync/wrangler.jsonc` |
-| `SYNC_FOLDERS` and the four sizing vars | `vars` in `packages/sync/wrangler.jsonc`; all optional |
+| `SYNC_FOLDERS` and the five sizing vars | `vars` in `packages/sync/wrangler.jsonc`; all optional |
 | `IMAP_PASSWORD` | `wrangler secret put`, sync worker only — never a `vars` entry |
-| The D1 database | provisioned on first deploy; see [Storage](#storage) |
+| The D1 database and the R2 bucket | provisioned on first deploy; see [Storage](#storage) |
 | The two queues | created by `wrangler deploy`; **Queues needs a Workers Paid plan** |
 
 Locally, secrets go in a gitignored `.dev.vars` per package; each has a `.dev.vars.example` to copy.
@@ -107,9 +107,10 @@ than owned by either worker — and both `wrangler.jsonc` files point their
 | --- | --- |
 | `folders` | one row per mailbox, carrying `uidvalidity` and the sync watermark |
 | `messages` | envelope fields plus the normalised plain-text body |
-| `attachments` | metadata and the R2 key; the bytes live in R2. Nothing writes it until [#9](https://github.com/lswith/imap-mcp/issues/9), so `get_message` reports the flag and says the list is unavailable rather than reporting "none" |
+| `attachments` | metadata and the R2 key; the bytes live in R2 |
 | `write_log` | every mailbox write, successful or not |
 | `messages_fts` | FTS5 over subject and body, BM25-ranked |
+| `attachments_fts` | FTS5 over attachment filenames and extracted text |
 
 Two things in that schema are load-bearing rather than incidental:
 
@@ -131,6 +132,64 @@ pinned by a test rather than left to be rediscovered: `unicode61` does not
 word-segment CJK, so a run like 会議は月曜日です indexes as a single token. It
 stores and reads back exactly; it is keyword search over it that is coarse, and
 a prefix query (`会議*`) is the way through.
+
+### Attachments
+
+Attachment bytes go to **R2**, with a metadata row in `attachments` pointing at
+them. They cannot go in D1 — its per-value limit is 2 MB — but the reason they
+are pulled during sync rather than on demand is the same reason the two workers
+are split at all: fetching on demand would put IMAP on the read path, so the
+app-specific password would have to exist in two places. R2 at about
+$0.015/GB-month makes storing everything the cheap option as well as the safe
+one.
+
+The key is **derived, not generated**: `att/<folder>/<uidvalidity>/<uid>/<part>`.
+So re-syncing a message overwrites its objects instead of duplicating them, with
+no bookkeeping to keep in step, and a folder that changed its `UIDVALIDITY`
+writes a new generation alongside the old rather than over it. Inline parts — the
+signature logos and embedded images — are stored like any other, with `is_inline`
+recorded so a reader can tell them apart.
+
+**Text is extracted for `.txt`, `.md` and `.csv`, and for nothing else.** PDF and
+`.docx` are stored and retrievable but **not indexed**: there is no good
+Workers-native PDF parser, and `.docx` needs a zip reader this does not have yet
+([#31](https://github.com/lswith/imap-mcp/issues/31)). For those, the filename is
+the only thing there is to search on, which is why `attachments_fts` indexes it
+alongside the text. That gap is also the single best justification for moving the
+sync path into a Cloudflare Container later; PDF extraction would ride along.
+
+An attachment that cannot be decoded is **not a failed message**. Its row is
+written with a null `r2_key` and a warning is logged, so a message that lost an
+attachment says so rather than looking like a message that never had one. A
+failure to *store* is different and does fail the range, which is deliberate:
+the bytes are written before the D1 row, so a failed write leaves no message row
+either, the uid bucket stays short, and gap detection queues the range again.
+The order is the mechanism — a row that could land while its bytes did not would
+mark the bucket complete for good.
+
+### Fetching a message has a size ceiling
+
+`cf-imap` materialises every attachment **twice** — decoded and base64 — on top
+of the whole raw message held as a string, and offers no streaming API. A spike
+measured a small `text/calendar` part at 3,377 bytes on the wire holding 8,585
+bytes resident, 2.54×, and that is a *small text* attachment. So a big enough
+message does not fail to fetch; it exhausts the isolate.
+
+The ceiling is therefore decided before any bytes move. Each range gets one
+**header-only `FETCH`** first, which answers `RFC822.SIZE` for every uid in it
+for the cost of a few hundred bytes each. That one number does two jobs: it
+decides which messages can be fetched at all, and it groups the rest into
+fetches bounded by bytes as well as by count, so ten ordinary messages still
+travel together and a single 6 MB one travels alone. `SYNC_MAX_FETCH_BYTES`
+(default 8 MiB) is both bounds at once, because the worst case either way is one
+message of that size in flight.
+
+A message above it is **recorded from its headers and never body-fetched**: the
+row carries `oversize = 1`, no body, no attachments, and no `In-Reply-To` or
+`References` either, since a header-only fetch does not ask for them. A row
+rather than nothing, because gap detection counts rows — skipping the message
+outright would leave its bucket permanently short and re-queue the range on
+every tick forever.
 
 ### There is no database export
 
@@ -163,8 +222,9 @@ no-op — applied migrations are recorded in a `d1_migrations` table.
 Once an hour, `imap-mcp-sync` connects and **enumerates**: it opens each
 configured folder read-only, lists UIDs — identifiers only, no bodies — and
 posts them to a Cloudflare Queue in ranges of about a hundred. A **consumer**
-then takes one range per invocation, fetches it over a single IMAP connection,
-reduces each message to a row and upserts it into D1.
+then takes one range per invocation, reads every message's size over a single
+IMAP connection, fetches the ones that fit, reduces each to a row and upserts it
+into D1 — with any attachment bytes written to R2 first.
 
 Three numbers in that shape are load-bearing:
 
@@ -300,10 +360,13 @@ strip them — it falls back to a matching subject within 30 days, bounded by a
 minimum subject length and re-checked exactly in TypeScript, and **the answer
 says which of the two happened**, because a subject match is a guess and should
 read as one. The database query behind that fallback is anchored at the end of
-the subject rather than searching anywhere inside it: the prefixes replies add
-are prefixes, so a suffix test keeps every reply form while refusing the
-unrelated mail that merely starts the same way — which would otherwise be able
-to crowd the genuine replies out of the answer. A message filed in several folders comes back once per copy rather
+the subject rather than searching anywhere inside it, and ignores spacing
+entirely: the prefixes replies add are prefixes, so a suffix test keeps every
+reply form while refusing the unrelated mail that merely starts the same way —
+which would otherwise be able to crowd the genuine replies out of the answer.
+Two subjects differing only in the case of a non-ASCII letter are the one thing
+it cannot match, because SQLite has only ASCII case folding; that is pinned by a
+test rather than left to be found. A message filed in several folders comes back once per copy rather
 than collapsed, since each copy is a different message on the server and that
 triple is what the write tools will act on.
 
@@ -320,7 +383,7 @@ Tracked as [issues on this repo](https://github.com/lswith/imap-mcp/issues):
 | [#6](https://github.com/lswith/imap-mcp/issues/6) | Queue fan-out for the sync path — *done* |
 | [#7](https://github.com/lswith/imap-mcp/issues/7) | MCP server and `search_messages` — *done* |
 | [#8](https://github.com/lswith/imap-mcp/issues/8) | Incremental sync: watermarks and `UIDVALIDITY` — *done* |
-| [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction |
+| [#9](https://github.com/lswith/imap-mcp/issues/9) | Attachments to R2, with text extraction — *done* |
 | [#10](https://github.com/lswith/imap-mcp/issues/10) | Gate the MCP endpoint with Access Managed OAuth — *done* |
 | [#11](https://github.com/lswith/imap-mcp/issues/11) | `get_message` and `get_thread` — *done* |
 | [#12](https://github.com/lswith/imap-mcp/issues/12) | Write tools over a service binding, with an audit log |

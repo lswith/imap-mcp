@@ -14,6 +14,17 @@ const DEFAULT_CHUNK_UIDS = 100;
 const DEFAULT_CHUNK_SIZE = 10;
 const DEFAULT_ENUMERATE_WINDOW = 5_000;
 const DEFAULT_MAX_CHUNKS_PER_RUN = 50;
+/**
+ * Byte budget for one FETCH, and the ceiling on a single message (#9).
+ *
+ * cf-imap materialises an attachment twice — decoded and base64 — on top of the
+ * full raw message held as a UTF-16 string, so the resident cost of a fetch is
+ * several times what crossed the wire. 8 MiB against a ~128 MB isolate leaves
+ * room for that multiple with the rest of the slice alongside it.
+ */
+const DEFAULT_MAX_FETCH_BYTES = 8 * 1024 * 1024;
+/** 64 MiB. Past this the multiple above stops fitting whatever else is true. */
+const MAX_FETCH_BYTES_CEILING = 64 * 1024 * 1024;
 
 /**
  * The worker is misconfigured. Not retryable, and treated like an auth failure
@@ -42,6 +53,11 @@ export type SyncConfig = {
   enumerateWindow: number;
   /** How many ranges one cron tick may queue, across all folders. */
   maxChunksPerRun: number;
+  /**
+   * Byte budget for one FETCH, and the ceiling on a single message. A message
+   * larger than this is recorded from its headers and never body-fetched.
+   */
+  maxFetchBytes: number;
   /** Only index mail received on or after this date, if set. */
   since?: Date;
 };
@@ -64,6 +80,12 @@ export function readSyncConfig(env: Env): SyncConfig {
       env.SYNC_MAX_CHUNKS_PER_RUN,
       "SYNC_MAX_CHUNKS_PER_RUN",
       DEFAULT_MAX_CHUNKS_PER_RUN,
+    ),
+    maxFetchBytes: positiveInt(
+      env.SYNC_MAX_FETCH_BYTES,
+      "SYNC_MAX_FETCH_BYTES",
+      DEFAULT_MAX_FETCH_BYTES,
+      MAX_FETCH_BYTES_CEILING,
     ),
   };
 

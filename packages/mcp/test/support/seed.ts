@@ -37,6 +37,8 @@ export type SeedMessage = {
   flags?: string[];
   sizeBytes?: number | null;
   hasAttachments?: boolean;
+  /** Too large to body-fetch (#9): a row with no body and no attachments. */
+  oversize?: boolean;
 };
 
 export type SeedAttachment = {
@@ -78,8 +80,8 @@ export async function seedMessage(message: SeedMessage = {}): Promise<number> {
     `INSERT INTO messages (folder_id, uidvalidity, uid, rfc_message_id, in_reply_to,
                            reference_ids, subject, from_address, from_addresses,
                            to_addresses, cc_addresses, internal_date, sent_date,
-                           size_bytes, flags, body_text, has_attachments)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           size_bytes, flags, body_text, has_attachments, oversize)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING id`,
   )
     .bind(
@@ -100,6 +102,7 @@ export async function seedMessage(message: SeedMessage = {}): Promise<number> {
       JSON.stringify(message.flags ?? []),
       message.body ?? null,
       message.hasAttachments ? 1 : 0,
+      message.oversize ? 1 : 0,
     )
     .first<{ id: number }>();
   if (!row) throw new Error("failed to seed message");

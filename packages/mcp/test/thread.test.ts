@@ -344,6 +344,31 @@ describe("getThread", () => {
       expect(found.basis).toBe("subject");
     });
 
+    it("groups a reply whose subject differs only in spacing", async () => {
+      // normaliseSubject collapses runs of whitespace and trims, so these are
+      // the same subject as far as the check that decides is concerned. The
+      // prefilter has to agree, or it discards the row before that check runs.
+      const first = await seedMessage({ subject: "Report from operations" });
+      const reply = await seedMessage({ subject: "Re:  Report   from\toperations  " });
+
+      const found = await thread(first);
+
+      expect(found.messages.map((message) => message.id)).toEqual([first, reply]);
+      expect(found.basis).toBe("subject");
+    });
+
+    it("misses a reply that differs only by non-ASCII case, which is a known limit", async () => {
+      // SQLite's lower() is ASCII-only and workerd exposes no Unicode-aware
+      // fold, so the prefilter cannot see these as the same subject however
+      // the needle is shaped. Pinned rather than left to be rediscovered: the
+      // fix is a normalised-subject column written at index time, which is a
+      // schema change and a backfill, so it belongs in its own ticket.
+      const first = await seedMessage({ subject: "Réunion hebdomadaire" });
+      await seedMessage({ subject: "Re: RÉUNION HEBDOMADAIRE" });
+
+      expect((await thread(first)).basis).toBe("alone");
+    });
+
     it("says so when the prefilter itself ran out of room", async () => {
       // Distinct from the result cap being reached: rows were dropped before
       // anything judged them, so members may be missing that would have been

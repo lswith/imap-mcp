@@ -190,18 +190,40 @@ const HEADER_PASS = `
  * still `=` against a `substr`, never `LIKE`, so there is no pattern language
  * for a subject to smuggle a wildcard through: `_` is common in real subjects.
  *
- * Three imprecisions remain in the prefilter, and each can only cause a miss,
- * never a false include, because TypeScript is what decides: SQLite's `lower()`
- * is ASCII-only, `rtrim()` strips spaces but not tabs, and a subject whose
- * internal whitespace is irregular will not match the collapsed needle.
+ * Whitespace is then removed from both sides rather than collapsed, because
+ * normalisation collapses it and the prefilter has to agree with the check that
+ * decides — otherwise "Re:  Report   from operations" is thrown away before
+ * anything judges it. Removing is used rather than collapsing because SQLite
+ * has no regex: four nested `replace()` calls remove the four whitespace
+ * characters a subject can carry, and no expression of comparable length
+ * collapses them.
+ *
+ * One imprecision remains, and it can only cause a miss, never a false include,
+ * because TypeScript is what decides: **SQLite's `lower()` is ASCII-only**, so
+ * two subjects differing only in the case of a non-ASCII letter are invisible
+ * to each other here. workerd exposes no Unicode-aware fold to reach for, so
+ * the fix is a normalised-subject column written at index time — a schema
+ * change and a backfill, and therefore its own ticket. A test pins the
+ * behaviour so it is a known limit rather than a surprise.
  */
+
+/**
+ * The subject reduced to what a comparison should see: lowercased as far as
+ * SQLite can, with every whitespace character removed.
+ *
+ * `char(9)`, `char(10)`, `char(13)`, `' '` — tab, newline, carriage return and
+ * space. A subject arrives unfolded from the IMAP layer and with invisible
+ * characters already stripped at index time, so those four are the set.
+ */
+const SUBJECT_KEY =
+  "replace(replace(replace(replace(lower(m.subject), char(9), ''), char(10), ''), char(13), ''), ' ', '')";
 const SUBJECT_PASS = `
   SELECT ${PREVIEW_COLUMNS}
   FROM messages m
   JOIN folders f ON f.id = m.folder_id
   WHERE ${GENERATION_GUARD}
     AND m.internal_date BETWEEN ?1 AND ?2
-    AND substr(rtrim(lower(m.subject)), -length(?3)) = ?3
+    AND substr(${SUBJECT_KEY}, -length(?3)) = ?3
   ORDER BY m.internal_date DESC, m.id DESC
   LIMIT ?4`;
 
@@ -272,6 +294,11 @@ async function headerPass(db: D1Database, closure: string[]): Promise<PreviewRow
   return results;
 }
 
+/** The needle, reduced the same way `SUBJECT_KEY` reduces the column. */
+function subjectKey(subject: string): string {
+  return subject.replace(/\s/gu, "");
+}
+
 /**
  * Candidates, and whether the prefilter itself ran out of room.
  *
@@ -289,7 +316,7 @@ async function subjectPass(
     .bind(
       seed.internalDate - SUBJECT_WINDOW_MS,
       seed.internalDate + SUBJECT_WINDOW_MS,
-      subject,
+      subjectKey(subject),
       SUBJECT_CANDIDATES,
     )
     .all<PreviewRow>();

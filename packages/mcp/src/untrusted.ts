@@ -159,11 +159,13 @@ function recipients(addresses: readonly string[]): string {
 }
 
 /**
- * What can be said about attachments today.
+ * What can honestly be said about a message's attachments.
  *
- * Nothing writes the `attachments` table yet (#9), so a message that plainly
- * has them has no rows to show. Rendering that as "none" would be a lie the
- * model then repeats to the user, so the three cases are kept apart.
+ * Four cases, kept apart because "none" is a claim and the other three are
+ * admissions. The sync worker writes attachment metadata (#9), but two kinds of
+ * row still carry none: one indexed before that landed, and an oversize one
+ * that was never fetched at all. Rendering either as "none" would be a lie the
+ * model then repeats to the user.
  */
 function attachmentLines(message: MessageRecord): string[] {
   if (message.attachments.length > 0) {
@@ -172,8 +174,14 @@ function attachmentLines(message: MessageRecord): string[] {
       ...message.attachments.map(attachmentLine),
     ];
   }
+  if (message.oversize) {
+    return ["  attachments: unknown — this message was never fetched, see below"];
+  }
   if (!message.hasAttachments) return ["  attachments: none"];
-  return ["  attachments: yes, but not yet indexed — filenames, types and sizes are unavailable"];
+  return [
+    "  attachments: present, but not indexed for this message — it would need re-indexing",
+    "    before its filenames, types and sizes could be listed",
+  ];
 }
 
 function attachmentLine(attachment: Attachment): string {
@@ -241,7 +249,7 @@ export function renderMessage(message: MessageRecord): string {
     ...attachmentLines(message),
     `  subject: ${flatten(message.subject)}`,
     "",
-    message.body === null ? "(this message was indexed with no body)" : body,
+    bodyRegion(message, body),
   );
 
   // The shortfall is stated after the closing tag, because it is this server's
@@ -261,6 +269,25 @@ export function renderMessage(message: MessageRecord): string {
       `</mailbox-message nonce="${id}">`,
     ].join("\n") + withheld
   );
+}
+
+/**
+ * The body, or an honest account of why there is not one.
+ *
+ * An oversize message is not an empty message: the sync worker recorded its
+ * identity and deliberately never fetched it, so its body and attachments are
+ * unknown rather than absent. Saying "no body" would invite the reader to
+ * conclude the message was empty, which is a claim about the mailbox this
+ * server is in no position to make.
+ */
+function bodyRegion(message: MessageRecord, body: string): string {
+  if (message.oversize) {
+    return (
+      "(this message was too large to fetch, so its body and attachments were never " +
+      "retrieved and are not in the index — only what is above was recorded)"
+    );
+  }
+  return message.body === null ? "(this message was indexed with no body)" : body;
 }
 
 /** What the caller is told about how these messages came to be listed together. */

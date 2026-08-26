@@ -99,13 +99,29 @@ describe("getMessage", () => {
     expect(message.bodyChars).toBe(0);
   });
 
-  it("reports the attachment flag even though nothing writes the metadata yet (#9)", async () => {
+  it("reports a message whose attachments were never indexed", async () => {
+    // #9 writes them now, but a row indexed before it landed still has none,
+    // and so does an oversize one. Either way the metadata is absent rather
+    // than empty, and the difference matters to what gets said about it.
     const id = await seedMessage({ hasAttachments: true });
 
     const message = await found(id);
 
     expect(message.hasAttachments).toBe(true);
     expect(message.attachments).toEqual([]);
+    expect(message.oversize).toBe(false);
+  });
+
+  it("reports a message that was too large to fetch as such", async () => {
+    // #9 gives an oversize message a row with no body, no attachments and no
+    // reference headers, so that its uid bucket is not permanently short.
+    // Serving that as an empty message would be a lie about the mailbox.
+    const id = await seedMessage({ oversize: true, body: null, sizeBytes: 40_000_000 });
+
+    const message = await found(id);
+
+    expect(message.oversize).toBe(true);
+    expect(message.body).toBeNull();
   });
 
   it("returns attachment rows in part order once there are any", async () => {

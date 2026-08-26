@@ -67,7 +67,7 @@ const IDENTITY_COLUMNS = `m.id, f.name AS folder, m.uid,
        m.reference_ids AS referenceIds, m.subject,
        m.from_address AS fromAddress, m.from_addresses AS fromAddresses,
        m.internal_date AS internalDate, m.sent_date AS sentDate,
-       m.has_attachments AS hasAttachments`;
+       m.has_attachments AS hasAttachments, m.oversize`;
 
 /**
  * The stale-generation guard, copied from `search.ts` because a folder that
@@ -93,6 +93,12 @@ type MessageIdentity = {
   /** The Date header: what the sender claims. Frequently absent or nonsense. */
   sentDate: number | null;
   hasAttachments: boolean;
+  /**
+   * Too large to body-fetch, so the sync worker stored identity and nothing
+   * else (#9). Its body, its attachments and its reference headers were never
+   * retrieved — absent rather than empty, which is a different thing to say.
+   */
+  oversize: boolean;
 };
 
 /** Threading identity. Read by thread.ts, never rendered. */
@@ -129,7 +135,12 @@ export type MessageRecord = MessageIdentity &
     body: string | null;
     /** Characters stored, so a response can state what it withheld. */
     bodyChars: number;
-    /** Empty for every message while #9 is open, even with hasAttachments set. */
+    /**
+     * Metadata for what the message carries (#9). Still empty for a message
+     * indexed before #9 landed, and for an oversize one that was never
+     * fetched — which is why `hasAttachments` and `oversize` are read
+     * alongside it rather than inferred from its length.
+     */
     attachments: Attachment[];
   };
 
@@ -143,7 +154,7 @@ export type MessageOutcome<T> = { ok: true; message: T } | { ok: false; reason: 
 /** The identity columns as D1 hands them back: JSON text and INTEGER bools. */
 type IdentityRow = Omit<
   MessageIdentity,
-  "hasAttachments" | "fromAddresses" | "internalDate" | "sentDate"
+  "hasAttachments" | "oversize" | "fromAddresses" | "internalDate" | "sentDate"
 > &
   ThreadIdentity & {
     uidValidity: number;
@@ -152,6 +163,7 @@ type IdentityRow = Omit<
     internalDate: number;
     sentDate: number | null;
     hasAttachments: number;
+    oversize: number;
   };
 
 type MessageRow = IdentityRow & {
@@ -193,6 +205,7 @@ function toIdentity(row: IdentityRow): MessageIdentity & ThreadIdentity {
     internalDate: row.internalDate,
     sentDate: row.sentDate,
     hasAttachments: row.hasAttachments === 1,
+    oversize: row.oversize === 1,
     rfcMessageId: row.rfcMessageId,
     inReplyTo: row.inReplyTo,
     referenceIds: row.referenceIds,

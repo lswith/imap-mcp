@@ -48,6 +48,16 @@ interface SyncEnvVars {
    * throttle on a backfill: at the defaults, ~5000 messages an hour.
    */
   readonly SYNC_MAX_CHUNKS_PER_RUN?: string;
+  /**
+   * Byte budget for one FETCH, and the ceiling on a single message. Defaults
+   * to 8 MiB.
+   *
+   * Both at once, deliberately: the worst case either way is one message of
+   * this size in flight, so a second knob would only let the two disagree. A
+   * message larger than this is never body-fetched at all -- its row is
+   * written from the header-only pass with `oversize` set.
+   */
+  readonly SYNC_MAX_FETCH_BYTES?: string;
   /** ISO date. When set, only mail received on or after it is indexed. */
   readonly SYNC_SINCE?: string;
 }

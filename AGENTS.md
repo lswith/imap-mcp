@@ -86,11 +86,12 @@ pnpm run deploy      # wrangler deploy
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
 (`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6), incremental
-sync (#8), the MCP server (`packages/mcp`, #7), the Access gate
-(`packages/mcp/src/access.ts`, #10) and the retrieval tools (`src/message.ts`
-and `src/thread.ts`, #11) are implemented and tested. The rest is tracked as
-issues on this repo: #9 attachments, #12 write tools, #24 flag reconciliation. See the roadmap table
-in README.md for the full list, and docs/access.md for the Access setup.
+sync (#8), attachments (`packages/sync/src/attachments.ts`, #9), the MCP server
+(`packages/mcp`, #7), the Access gate (`packages/mcp/src/access.ts`, #10) and
+the retrieval tools (`src/message.ts` and `src/thread.ts`, #11) are implemented
+and tested. The rest is tracked as issues on this repo: #12 write tools, #24
+flag reconciliation, #31 `.docx` text extraction. See the roadmap table in
+README.md for the full list, and docs/access.md for the Access setup.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -108,8 +109,9 @@ trip over if they are not known:
 - **Timestamps are INTEGER epoch milliseconds** everywhere.
 - `messages_fts` is **external content plus triggers**. Writes to `messages`
   reindex themselves; a flags-only `UPDATE` deliberately does not. Adding an
-  FTS column or changing the tokenizer needs a full reindex, so #9 gets its own
-  FTS table over `attachments.extracted_text` rather than a column here.
+  FTS column or changing the tokenizer needs a full reindex, which is why #9
+  added `attachments_fts` (`migrations/0002_attachments.sql`) as its own table
+  over `attachments.extracted_text` rather than a column here.
 - **There is no `wrangler d1 export`** for this database — it refuses to run
   against FTS5 — so re-running the backfill is the recovery path.
 - No `database_id` is committed; the binding is provisioned on first deploy.
@@ -190,6 +192,51 @@ And from the sync worker (`packages/sync`, #5 and #6), for the same reason:
   answers "still there" — a range must never be dropped on the strength of a
   question that went unanswered.
 
+And from attachments (`packages/sync/src/attachments.ts`, #9):
+
+- **The R2 key is derived, never generated**:
+  `att/<folder_id>/<uidvalidity>/<uid>/<part_index>`. That is the whole of what
+  makes a re-sync overwrite rather than duplicate, and `uidvalidity` is in it
+  because a renumbered folder holds different messages under the same uids.
+- **Bytes go to R2 *before* the message row goes to D1**, and a failed put means
+  no row at all. Gap detection counts `messages` rows, so a row that landed
+  while its bytes did not would mark the uid bucket complete and the range would
+  never be enqueued again. Reversing this order is silent data loss, not a
+  refactor. It is also why the R2 writes are **not** `waitUntil`-ed, despite
+  what the old comment in `src/index.ts` anticipated.
+- **A message and its attachment rows go in one `db.batch()`**, with
+  `attachments.message_id` resolved by a subselect on
+  `(folder_id, uidvalidity, uid)` rather than by an id read back. One implicit
+  transaction, so a message row can never claim attachments whose rows did not
+  land. The rows are `DELETE`d and reinserted rather than upserted, so a part
+  that is no longer there leaves no row behind.
+- **Whether a message can be fetched is decided before any bytes move.** One
+  header-only `FETCH` per range answers `RFC822.SIZE` for every uid; anything
+  over `SYNC_MAX_FETCH_BYTES` is recorded from those headers with
+  `messages.oversize` set and never body-fetched. `byteLimit` alone would not do
+  — it is `BODY.PEEK[]<0.N>`, a partial fetch that truncates rather than
+  refusing, so relying on it means parsing damaged MIME and hoping to notice. It
+  is still sent, as a second line of defence against a low `RFC822.SIZE`.
+- **An oversize message still gets a row.** Skipping it would leave its uid
+  bucket permanently short and re-queue the range on every tick for good. The
+  row has no body, no attachments, and no `in_reply_to` or `reference_ids` — a
+  header-only fetch does not ask for those.
+- **Slices are bounded by bytes as well as by count.** `SYNC_CHUNK_SIZE` is the
+  count; `SYNC_MAX_FETCH_BYTES` is the bytes, and the same value is the
+  per-message ceiling so the two cannot disagree.
+- **An attachment that fails to decode is never a failed message.** Its row is
+  written with a null `r2_key` and warned about. Extraction is total by
+  construction (every decode path has a fallback that cannot throw); an
+  extractor that *can* fail — a zip reader, a PDF parser — must swallow its own
+  failures and answer null.
+- **Text is extracted for `.txt`, `.md` and `.csv` only.** The extension wins
+  when there is one, and an unrecognised extension is a "no" rather than a
+  reason to consult the MIME type — `notes.txt.pdf` is a PDF. PDF and `.docx`
+  are stored and retrievable but not indexed; `.docx` is #31.
+- **R2 objects carry no `httpMetadata`.** `filename` and `mimeType` are written
+  by whoever sent the message, and an object with an author-chosen content type
+  is a loaded gun for whoever later serves these bytes over HTTP. D1 holds both.
+
 And from the MCP server (`packages/mcp`, #7), which is where anything reaching a
 model is decided:
 
@@ -261,19 +308,28 @@ model is decided:
   and exact equality on the normalised subject re-checked in TypeScript. It has
   no cryptographic tie between the messages it groups, so the note after the
   closing tag says outright that the grouping is a guess.
-- **SQL narrows and TypeScript decides — but the narrowing has to be tight, not
-  merely correct.** The limit cuts the candidate set *before* the exact check
-  runs, so a superset prefilter is a way to starve it: with
+- **SQL narrows and TypeScript decides — so the narrowing has to agree with the
+  check that decides, in both directions.** The limit cuts the candidate set
+  *before* the exact check runs, which makes both a loose prefilter and a strict
+  one a way to get the wrong answer. Too loose starves it: with
   `instr(lower(subject), ?)`, fifty newer "X — daily digest 47" subjects could
-  fill the limit and the genuine reply would never be judged. The test is
-  anchored at the end instead — `substr(rtrim(lower(m.subject)), -length(?)) =
-  ?` — because everything normalisation strips is a *prefix*, which makes the
-  normalised subject a suffix of the raw one. Still `=` against a `substr` and
-  never `LIKE`: `_` is a wildcard and is common in real subjects. And the
-  candidate limit is deliberately larger than the result cap, because the two
-  answer different questions — one bounds what reaches a model, the other what
-  the exact check is allowed to look at. When the prefilter is the thing that
-  ran out of room, the answer reports it.
+  fill the limit and the genuine reply would never be judged. Too strict drops
+  members outright: a prefilter that cared about spacing threw away
+  "Re:  Report   from operations", which normalisation plainly makes the same
+  subject. So the test is **anchored at the end and blind to whitespace** —
+  everything normalisation strips is a *prefix*, which makes the normalised
+  subject a suffix of the raw one, and whitespace is removed from both sides
+  because SQLite has no regex to collapse it with. Still `=` against a `substr`
+  and never `LIKE`: `_` is a wildcard and is common in real subjects. The
+  candidate limit is deliberately larger than the result cap — the two answer
+  different questions, one bounding what reaches a model and the other what the
+  exact check may look at — and when the prefilter is what ran out of room, the
+  answer reports it.
+- **The one subject difference the prefilter cannot see is non-ASCII case**,
+  because SQLite's `lower()` is ASCII-only and workerd exposes no Unicode-aware
+  fold. It can only cause a miss, never a false include. Pinned by a test rather
+  than left to be rediscovered; the fix is a normalised-subject column written
+  at index time, which is a schema change and a backfill.
 - **`json_each` through D1's `prepare`/`bind` is load-bearing, and pinned by its
   own test** (`test/thread.test.ts`). The header pass binds its whole identity
   closure as one JSON array. If a workerd bump ever takes json1's table-valued
@@ -289,10 +345,16 @@ model is decided:
   addresses a different `(folder, uidvalidity, uid)` that #12's write tools will
   act on. Collapsing them would read more tidily and hand back an id that only
   half-identifies anything.
-- **`attachments` has no writer while #9 is open**, so the join returns nothing
-  even for a message with `has_attachments = 1`. Rendering that as "none" would
-  be a lie the model repeats to the user, so the three cases — none, present but
-  unindexed, listed — are kept apart.
+- **"No attachment rows" is not the same claim as "no attachments".** #9 writes
+  them now, but a message indexed before it landed still has none, and an
+  oversize message never had any fetched at all. Rendering either as "none"
+  would be a lie the model repeats to the user, so the four cases — none,
+  listed, present-but-unindexed, and never-fetched — are kept apart. The same
+  goes for the body: an **oversize** message (`messages.oversize`, #9) is one
+  the sync worker deliberately did not fetch, so `get_message` says that rather
+  than "indexed with no body", which would invite the reader to conclude the
+  message was empty. Such a row also carries no In-Reply-To or References, so
+  the subject fallback is the only route a thread has to it.
 - **Search joins on the folder's current `uidvalidity`.** A folder that changed
   it leaves the previous generation in `messages` rather than colliding with it,
   so without the join every message in a re-synced folder comes back twice —
