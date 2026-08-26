@@ -319,7 +319,13 @@ model is decided:
   subject. So the test is **anchored at the end and blind to whitespace** —
   everything normalisation strips is a *prefix*, which makes the normalised
   subject a suffix of the raw one, and whitespace is removed from both sides
-  because SQLite has no regex to collapse it with. Still `=` against a `substr`
+  because SQLite has no regex to collapse it with. "Whitespace" there means
+  every character JavaScript's `\s` matches — twenty-five of them, including
+  the non-breaking space and the en and em spaces, not the four obvious ASCII
+  ones — because that is what `normaliseSubject` collapses. Both halves are
+  generated from one exported list (`SUBJECT_WHITESPACE`), and a test scans the
+  BMP to prove the list is exactly what `\s` matches, so the two sides agree by
+  construction rather than by review. Still `=` against a `substr`
   and never `LIKE`: `_` is a wildcard and is common in real subjects. The
   candidate limit is deliberately larger than the result cap — the two answer
   different questions, one bounding what reaches a model and the other what the

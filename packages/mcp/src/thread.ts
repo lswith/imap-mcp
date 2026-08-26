@@ -193,10 +193,10 @@ const HEADER_PASS = `
  * Whitespace is then removed from both sides rather than collapsed, because
  * normalisation collapses it and the prefilter has to agree with the check that
  * decides — otherwise "Re:  Report   from operations" is thrown away before
- * anything judges it. Removing is used rather than collapsing because SQLite
- * has no regex: four nested `replace()` calls remove the four whitespace
- * characters a subject can carry, and no expression of comparable length
- * collapses them.
+ * anything judges it. Removing rather than collapsing because SQLite has no
+ * regex to collapse with; and every character `\s` matches rather than the
+ * four obvious ones, because a subject carrying a non-breaking space is the
+ * same subject to the check that decides. See `SUBJECT_WHITESPACE`.
  *
  * One imprecision remains, and it can only cause a miss, never a false include,
  * because TypeScript is what decides: **SQLite's `lower()` is ASCII-only**, so
@@ -208,15 +208,40 @@ const HEADER_PASS = `
  */
 
 /**
- * The subject reduced to what a comparison should see: lowercased as far as
- * SQLite can, with every whitespace character removed.
+ * Every character JavaScript's `\s` matches, as code points.
  *
- * `char(9)`, `char(10)`, `char(13)`, `' '` — tab, newline, carriage return and
- * space. A subject arrives unfolded from the IMAP layer and with invisible
- * characters already stripped at index time, so those four are the set.
+ * This list is the single source of both halves of the whitespace agreement:
+ * the SQL prefilter removes exactly these, and so does the needle it is
+ * compared against. Writing it out matters because the two halves run in
+ * different languages — `normaliseSubject` collapses `\s`, which is 25
+ * characters including the non-breaking space and the en and em spaces, while
+ * SQLite has no character class at all. A prefilter that removed only the four
+ * obvious ASCII ones would discard a subject carrying a non-breaking space
+ * before the check that would have accepted it ever ran.
+ *
+ * A test scans the BMP and asserts this list is exactly what `\s` matches, so
+ * "these agree" is proved rather than intended. Index-time stripping does not
+ * help here: a non-breaking space is legitimate text, so `stripInvisible`
+ * rightly leaves it in the subject it stores.
  */
-const SUBJECT_KEY =
-  "replace(replace(replace(replace(lower(m.subject), char(9), ''), char(10), ''), char(13), ''), ' ', '')";
+export const SUBJECT_WHITESPACE = [
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005,
+  0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+] as const;
+
+/**
+ * The subject reduced to what a comparison should see: lowercased as far as
+ * SQLite can, with every one of those characters removed.
+ *
+ * Generated rather than written out, because twenty-five nested `replace()`
+ * calls are not something to keep correct by hand — and because generating it
+ * from the same list the needle uses is what makes the two sides agree by
+ * construction rather than by review.
+ */
+const SUBJECT_KEY = SUBJECT_WHITESPACE.reduce(
+  (expression, code) => `replace(${expression}, char(${code}), '')`,
+  "lower(m.subject)",
+);
 const SUBJECT_PASS = `
   SELECT ${PREVIEW_COLUMNS}
   FROM messages m
@@ -295,8 +320,13 @@ async function headerPass(db: D1Database, closure: string[]): Promise<PreviewRow
 }
 
 /** The needle, reduced the same way `SUBJECT_KEY` reduces the column. */
+const WHITESPACE = new RegExp(
+  `[${SUBJECT_WHITESPACE.map((code) => `\\u{${code.toString(16)}}`).join("")}]`,
+  "gu",
+);
+
 function subjectKey(subject: string): string {
-  return subject.replace(/\s/gu, "");
+  return subject.replace(WHITESPACE, "");
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   MAX_THREAD_MESSAGES,
   normaliseSubject,
   SUBJECT_CANDIDATES,
+  SUBJECT_WHITESPACE,
   SUBJECT_WINDOW_MS,
 } from "../src/thread";
 import { clearIndex, seedMessage } from "./support/seed";
@@ -149,6 +150,21 @@ describe("identityClosure", () => {
     // tail is the immediate ancestry. The middle is what both ends imply.
     expect(closure[0]).toBe(ids[0]);
     expect(closure.at(-1)).toBe(ids.at(-1));
+  });
+});
+
+describe("SUBJECT_WHITESPACE", () => {
+  it("is exactly the set JavaScript's \\s matches", () => {
+    // The prefilter and the check that decides are both derived from this
+    // list, so the guarantee they agree is only as good as the list being
+    // complete. Scanned rather than asserted by eye: a character that matches
+    // \s but is missing here is a genuine thread member silently dropped.
+    const matched: number[] = [];
+    for (let code = 0; code <= 0xffff; code++) {
+      if (/\s/u.test(String.fromCharCode(code))) matched.push(code);
+    }
+
+    expect([...SUBJECT_WHITESPACE].sort((a, b) => a - b)).toEqual(matched);
   });
 });
 
@@ -355,6 +371,26 @@ describe("getThread", () => {
 
       expect(found.messages.map((message) => message.id)).toEqual([first, reply]);
       expect(found.basis).toBe("subject");
+    });
+
+    it("groups replies differing by any character JavaScript calls whitespace", async () => {
+      // normaliseSubject collapses /\s/, which is 25 characters and not the
+      // four ASCII ones — a subject carrying a non-breaking space or an en
+      // space is the same subject to the check that decides, so the prefilter
+      // has to remove those too or it discards the row before that check runs.
+      for (const code of SUBJECT_WHITESPACE) {
+        await clearIndex();
+        const character = String.fromCodePoint(code);
+        const first = await seedMessage({ subject: "Report from operations" });
+        const reply = await seedMessage({ subject: `Re: Report${character}from operations` });
+
+        const found = await thread(first);
+
+        expect(
+          found.messages.map((message) => message.id),
+          `U+${code.toString(16)}`,
+        ).toEqual([first, reply]);
+      }
     });
 
     it("misses a reply that differs only by non-ASCII case, which is a known limit", async () => {
