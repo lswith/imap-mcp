@@ -49,6 +49,17 @@
       "migrations_dir": "../../migrations"
     }
   ],
+  // Attachment bytes (#9). D1 caps a single value at 2 MB, so the bytes cannot
+  // live there whatever else were true; the metadata row in `attachments`
+  // carries the key of the object here.
+  //
+  // Named and not identified, exactly like the D1 binding above: a bucket name
+  // is scoped to an account rather than identifying one, so it is safe to
+  // commit, and `wrangler deploy` provisions the bucket on first use. Only this
+  // worker is bound to it -- the MCP server reads attachment metadata and
+  // extracted text out of D1, and nothing has yet needed to hand a model the
+  // bytes themselves.
+  "r2_buckets": [{ "binding": "ATTACHMENTS", "bucket_name": "imap-mcp-attachments" }],
   // Hourly, on the hour. Cron is UTC but the cadence is timezone-agnostic.
   "triggers": { "crons": ["0 * * * *"] },
   // The fan-out (#6). The cron enumerates uids and posts ~100-uid ranges here;
@@ -89,7 +100,6 @@
   //
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
-  //   r2_buckets  -- #9
   //
   // Nor is a `vars` block, which is why src/env.d.ts declares the shape
   // instead: the mailbox host and user identify one person's account, and this
@@ -100,6 +110,7 @@
   //   SYNC_CHUNK_UIDS, SYNC_CHUNK_SIZE -- uids per queue message, messages per fetch
   //   SYNC_ENUMERATE_WINDOW            -- uids per enumeration SEARCH
   //   SYNC_MAX_CHUNKS_PER_RUN          -- ranges one cron tick may queue
+  //   SYNC_MAX_FETCH_BYTES             -- byte budget for one FETCH; the ceiling on one message
   //   SYNC_SINCE                       -- optional ISO date floor
   //
   // Secrets (set with `pnpm exec wrangler secret put`):
