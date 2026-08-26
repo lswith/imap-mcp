@@ -1,10 +1,31 @@
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
+import { exportJWK, generateKeyPair } from "jose";
 import { defineConfig } from "vitest/config";
 
 // The schema lives at the repo root and is shared by both workers. Reading it
 // here rather than hand-writing a fixture means these tests run against the
 // exact SQL `wrangler d1 migrations apply` would run.
 const migrations = await readD1Migrations(new URL("../../migrations", import.meta.url).pathname);
+
+// A throwaway Zero Trust tenant for the suite, minted fresh on every run.
+//
+// The keys are generated here, in Node, rather than inside a test, because two
+// places need them and only one of them is the worker: the tests sign
+// assertions with the private half, and `outboundService` below answers the
+// worker's JWKS fetch with the public half. Generating per run is also why no
+// private key is committed to a public repository — there is no fixture to
+// leak, and a suite that passes proves a real RS256 signature was verified.
+const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
+const TEST_ACCESS_JWKS = JSON.stringify({
+  keys: [{ ...(await exportJWK(publicKey)), alg: "RS256", kid: "test" }],
+});
+const TEST_ACCESS_KEY = JSON.stringify(await exportJWK(privateKey));
+
+// Matches test/support/access.ts. A domain that cannot resolve, deliberately:
+// if `outboundService` ever stops intercepting, the tests fail rather than
+// quietly reaching the internet.
+const TEST_TEAM_DOMAIN = "https://imap-mcp-test.cloudflareaccess.com";
+const TEST_AUD = "0d3ad0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d";
 
 // Tests run inside workerd (the real Worker runtime) against this package's
 // own wrangler.jsonc, so the compatibility flags and bindings
@@ -13,8 +34,26 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
-      // A test-only binding: the setup file applies these to env.DB.
-      miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+      miniflare: {
+        bindings: {
+          // Test-only: the setup file applies these to env.DB.
+          TEST_MIGRATIONS: migrations,
+          TEST_ACCESS_JWKS,
+          TEST_ACCESS_KEY,
+          // The Access `vars` a deployer adds. wrangler.jsonc commits none —
+          // this repository is public — so the suite supplies them the same way
+          // a deploy does. src/env.d.ts is where their shape is declared.
+          ACCESS_TEAM_DOMAIN: TEST_TEAM_DOMAIN,
+          ACCESS_AUD: TEST_AUD,
+        },
+        // Everything the worker fetches. Only the tenant's JWKS is answered;
+        // anything else is a 404, so a test cannot accidentally depend on the
+        // network being there.
+        outboundService: (request) =>
+          new URL(request.url).href === `${TEST_TEAM_DOMAIN}/cdn-cgi/access/certs`
+            ? new Response(TEST_ACCESS_JWKS, { headers: { "content-type": "application/json" } })
+            : new Response("not found", { status: 404 }),
+      },
     }),
   ],
   test: {

@@ -2,5 +2,24 @@
 #
 # This worker deliberately holds no IMAP credential — the sync worker owns it,
 # and writes reach that worker over a service binding (#12).
-# Nothing here yet; the file exists so the pattern is obvious when Access
-# configuration lands (#10).
+#
+# Neither value below is a secret: a team domain is public and an AUD tag is an
+# identifier, not a credential. In production both are `vars` in wrangler.jsonc,
+# added at deploy time because this repository is public. They are repeated here
+# only so `wrangler dev` can be pointed at a real tenant.
+
+# ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com
+# ACCESS_AUD=<application audience tag>
+
+# Worth knowing before you reach for `wrangler dev` at all:
+#
+# Cloudflare Access is not in front of a local worker, so nothing attaches a
+# Cf-Access-Jwt-Assertion header to your request. With the two variables set,
+# every local request is therefore answered 401; with them unset, 500. Neither
+# is a bug — it is the gate failing closed, which is the whole point of it.
+#
+# So local work on the MCP tools happens through `pnpm run test` and
+# `pnpm run test:watch`, which mint real assertions against a throwaway tenant
+# (see test/support/access.ts). To drive a *deployed* instance by hand instead,
+# `cloudflared access token -app=https://<your-host>` prints a real assertion
+# you can pass as that header.

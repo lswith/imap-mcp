@@ -71,10 +71,11 @@ pnpm run deploy      # wrangler deploy
 
 Early. The mailbox interface (`packages/imap`, #3), the D1 schema
 (`migrations/`, #4), the tracer sync (#5), the queue fan-out (#6), incremental
-sync (#8) and the MCP server (`packages/mcp`, #7) are implemented and tested.
-The rest is tracked as issues on this repo: #9 attachments, #10 Access, #11
-`get_message` and `get_thread`, #12 write tools, #24 flag reconciliation. See
-the roadmap table in README.md for the full list.
+sync (#8), the MCP server (`packages/mcp`, #7) and the Access gate
+(`packages/mcp/src/access.ts`, #10) are implemented and tested. The rest is
+tracked as issues on this repo: #9 attachments, #11 `get_message` and
+`get_thread`, #12 write tools, #24 flag reconciliation. See the roadmap table
+in README.md for the full list, and docs/access.md for the Access setup.
 
 Constraints already built into `packages/imap`, because the tickets downstream
 of it depend on them: everything is addressed by UID, fetches always PEEK,
@@ -211,4 +212,65 @@ model is decided:
 - **Origin is validated, Host is not.** On Workers `request.url` is built from
   the Host header, so checking one against the other answers nothing. Origin is
   what separates a browser from an MCP client: clients send none and pass, a
-  page on another site sends its own and is turned away.
+  page on another site sends its own and is turned away. The one place Host is
+  reflected is the RFC 9728 document, which asserts nothing but the hostname the
+  caller itself asked for.
+
+And from the Access gate (`packages/mcp/src/access.ts`, #10), which is the
+load-bearing control in the whole design rather than hygiene on top of it:
+
+- **The token the client holds and the token the worker checks are different
+  things.** Managed OAuth issues the *client* an opaque token (`oauth:...`) that
+  only Access can verify; Access exchanges it at the edge and forwards a signed
+  JWT in `Cf-Access-Jwt-Assertion`. So the gate reads that header, never
+  `Authorization`. Anyone "fixing" it to read the bearer token would be trusting
+  a string this worker cannot read.
+- **`aud` is pinned, and that is the half that does the work.** Every
+  application in one Zero Trust account is signed by the same team keys, so a
+  signature-and-issuer check admits users of any of them — including an
+  application whose policy lets the whole internet in. `algorithms: ["RS256"]`
+  and `requiredClaims: ["exp"]` are pinned for the same reason and are not
+  belt-and-braces: a test proves that without them an HS256 token signed with a
+  guessed secret, and a token carrying no expiry at all, both verify.
+- **Verified here rather than trusted from the edge**, which is what makes the
+  gate survive a mistake in front of it — a route added before the Access
+  application exists, a policy edited to bypass, an origin reachable by some
+  path that did not traverse Access. The native `ctx.access` API is deliberately
+  not used: it is edge-provided identity, which is the thing this ticket set out
+  not to rely on, and it postdates the compat date the vitest pool's workerd
+  caps at.
+- **Absent configuration is a 500, never a pass and never a 401.** A 401 would
+  invite a client into an OAuth flow that cannot succeed; a 403 would claim a
+  correct credential was rejected and send the deployer to edit the wrong thing.
+  What must never happen is the third option. `readAccessConfig` returns an
+  outcome rather than throwing, matching `SearchOutcome` in `src/search.ts`, so
+  the failure cannot be walked past by forgetting a `catch`.
+- **An unreachable JWKS answers 503, not 401.** Reporting it as `invalid_token`
+  tells a client its perfectly good session was revoked, sending it back through
+  OAuth for a token that fails identically — a browser window at the user for
+  what is usually a blip. The jose errors that judge the *token* are enumerated
+  explicitly, because the interesting ones are not subclasses: a certs endpoint
+  answering 404 throws the *base* `JOSEError`, so "is it a JOSEError" would call
+  an outage the caller's fault. Anything unrecognised falls to 503 deliberately.
+- **The order in `fetch` is discovery → 404 → Origin → Access, and the Origin
+  step is not swappable.** A DNS-rebound browser request carries the victim's
+  Access cookie, so the edge attaches a genuine assertion and the Access check
+  *passes*. Origin is the only thing that stops it, so it must not be reachable
+  past by holding a valid session.
+- **`/.well-known/oauth-protected-resource` is served unauthenticated, ahead of
+  everything.** The MCP authorization spec makes RFC 9728 metadata a MUST, and
+  the `resource_metadata` pointer in this worker's own 401 has to lead
+  somewhere — otherwise the one case where that 401 fires is the case where its
+  pointer hits the 404. With Access in front, the edge answers first and this
+  copy is never reached; its audience is the backstop and `wrangler dev`.
+- **The JWKS set is cached at module scope keyed by team domain, unlike the
+  handler, which is built per request.** The handler closes over `env`; a key
+  set closes over a URL, so keying the map by that URL makes the closure hazard
+  structurally impossible. jose's cache and cooldown live *inside* the object
+  `createRemoteJWKSet` returns, so rebuilding it per request means a certs
+  subrequest on every single tool call.
+- **`wrangler dev` answers 401 to everything, and that is correct.** Nothing
+  attaches the assertion header locally. The tests mint real RS256 assertions
+  against a throwaway tenant generated per run in `vitest.config.ts` and served
+  back through `outboundService`, so no key is committed and a passing test
+  proves a real signature was verified — not that a check was stubbed out.
