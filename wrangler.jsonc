@@ -70,8 +70,10 @@
   "triggers": { "crons": ["0 * * * *"] },
   // The fan-out (#6). The cron enumerates uids and posts ~100-uid ranges here;
   // this same worker consumes them, one range per invocation over one IMAP
-  // connection. Both queues are created by `wrangler deploy`, and Queues needs
-  // a Workers Paid plan.
+  // connection. Both queues are created by `wrangler deploy`. Queues has been
+  // on the Workers Free plan since 2026-02; what needs Workers Paid is the CPU
+  // limit -- 10 ms free against 30 s paid, and parsing a message's MIME does
+  // not fit in 10 ms. See docs/adr/0001-workers-paid-not-free-tier.md.
   "queues": {
     "producers": [{ "binding": "SYNC_QUEUE", "queue": "imap-mcp-sync-chunks" }],
     "consumers": [

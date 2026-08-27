@@ -13,8 +13,13 @@ the manual path and the detail behind the prompts.
 ## What you need
 
 - A Cloudflare account on the **Workers Paid plan** (US$5/month at time of
-  writing). The sync fan-out runs on Cloudflare Queues, which the free plan
-  does not include — a free-plan deploy fails at queue provisioning.
+  writing). The binding constraint is CPU, not Queues: the free plan caps a
+  Worker at 10 ms of CPU per invocation, and MIME parsing, base64 decoding and
+  HTML-to-text extraction do not fit in that. Paid gives 30 seconds per
+  invocation, raisable to five minutes with `limits.cpu_ms`. Queues itself has
+  been available on the free plan since February 2026;
+  [ADR 0001](./adr/0001-workers-paid-not-free-tier.md) has the full argument,
+  including what a free-tier design would have cost.
   Everything else (the Worker, D1, R2) fits comfortably in the paid plan's
   included usage for a single mailbox.
 - A mailbox **app-specific password**. For iCloud: appleid.apple.com →

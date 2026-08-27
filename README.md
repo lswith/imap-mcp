@@ -43,9 +43,12 @@ essay.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/lswith/imap-mcp)
 
-**What it costs, before you click:** the sync fan-out runs on Cloudflare
-Queues, which requires the **Workers Paid plan** (US$5/month at time of
-writing) — a free-plan deploy fails at queue provisioning. Everything else
+**What it costs, before you click:** you need the **Workers Paid plan**
+(US$5/month at time of writing). Not for Queues — that has been available on
+the free plan since February 2026 — but for CPU: the free plan caps a Worker
+at 10 ms of CPU per invocation, and parsing a message's MIME, decoding its
+attachments and extracting its text does not fit in that. Paid raises the cap
+to 30 seconds. Everything else
 fits comfortably in the paid plan's included usage for one mailbox. You also
 need a mailbox **app-specific password**; on iCloud it grants full mailbox
 access including SMTP send, so treat it like the account password.
