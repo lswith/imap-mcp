@@ -155,7 +155,7 @@ budget, a dead-letter queue, and a concurrency ceiling that is one number in
 ## Consequences
 
 - **The docs are wrong in five places.** `README.md`, `docs/deploy.md`,
-  `.env.example`, `scripts/setup-access.sh` and `wrangler.jsonc` all say Queues
+  the configuration docs, `scripts/setup-access.sh` and `wrangler.jsonc` all say Queues
   requires Workers Paid. The paid requirement is real, but its reason is the CPU
   limit, not Queues, and the note should say what is actually true.
 - **`limits.cpu_ms` should be set**, now that it does something.

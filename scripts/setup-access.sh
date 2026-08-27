@@ -187,7 +187,7 @@ finish() {
 # repository, so every value is prompted for. What it collects lands in a
 # gitignored .env as your record of the values; runtime configuration itself
 # goes into the `vars` block of wrangler.jsonc IN YOUR FORK (correct there,
-# never pushed upstream) — see .env.example.
+# never pushed upstream) — see docs/configuration.md.
 #
 # The order below is not the order the docs used to give, and the difference
 # matters: Access is attached to the WORKER rather than to a hostname, and you

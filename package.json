@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Generic IMAP to MCP server on Cloudflare Workers: one Worker that syncs a mailbox into D1 and serves it over MCP.",
+  "cloudflare": {
+    "bindings": {
+      "IMAP_HOST": "Your mailbox's IMAP hostname. For iCloud: imap.mail.me.com",
+      "IMAP_USER": "Your mailbox user. For iCloud this is the LOCAL PART ONLY of the address -- \"ada\", not \"ada@icloud.com\".",
+      "IMAP_PASSWORD": "An app-specific password for that mailbox, NOT your account password. iCloud: appleid.apple.com -> Sign-In and Security -> App-Specific Passwords.",
+      "MCP_API_KEY": "The bearer token your MCP clients will present to this server. Generate a random one: openssl rand -base64 32"
+    }
+  },
   "license": "MIT",
   "packageManager": "pnpm@11.5.2",
   "scripts": {
@@ -11,8 +19,8 @@
     "deploy": "pnpm run db:migrate:remote && wrangler deploy",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "types": "wrangler types",
-    "typecheck": "wrangler types && tsc --noEmit",
+    "types": "wrangler types --strict-vars=false",
+    "typecheck": "wrangler types --strict-vars=false && tsc --noEmit && tsc -p tsconfig.node.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -28,7 +36,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.1",
-    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/vitest-plugin": "^1.0.0",
     "@modelcontextprotocol/client": "^2.0.0",
     "@types/node": "^26.2.0",
     "@vitest/coverage-istanbul": "^4.1.9",

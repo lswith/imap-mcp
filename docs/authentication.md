@@ -148,8 +148,10 @@ present but unchecked, so the key still authenticates you and there is no gap.
    one Zero Trust account is signed by the same keys, so the audience is the
    only thing that distinguishes them — and the worker pins it.
 
-5. **Set `ACCESS_AUD`** — a `vars` entry in your fork's `wrangler.jsonc` —
-   and redeploy. From this deploy on, Access is required and the API key is
+5. **Set `ACCESS_AUD`** — a `vars` entry in a fork's `wrangler.jsonc`, or a
+   dashboard variable when you are deploying this public repository itself
+   (an audience tag identifies one Zero Trust application, so it is not
+   committable here) — and redeploy. From this deploy on, Access is required and the API key is
    refused.
 
 ### Recovering from a lockout

@@ -260,7 +260,7 @@ commits the values that identify nobody and none of the ones that identify you.
 | Value | Where it lives |
 | --- | --- |
 | `LOG_LEVEL`, `IMAP_PORT`, `SYNC_FOLDERS`, the sizing knobs | the `vars` block in `wrangler.jsonc`, at their defaults |
-| `IMAP_HOST`, `IMAP_USER`, `SYNC_SINCE`, `DRAFT_FROM`, `DRAFTS_FOLDER`, `ACCESS_AUD` | your fork's `wrangler.jsonc`, or the dashboard |
+| `IMAP_HOST`, `IMAP_USER`, `SYNC_SINCE`, `DRAFT_FROM`, `DRAFTS_FOLDER`, `ACCESS_AUD` | a fork's `wrangler.jsonc`, or the dashboard — and the dashboard (or `wrangler secret put`) is the only choice when the repository being deployed is this public one, see [deploy.md](./deploy.md#deploying-this-repository-itself) |
 | `IMAP_PASSWORD`, `MCP_API_KEY` | Worker secrets, never vars |
 
 Two consequences worth knowing before they surprise you:

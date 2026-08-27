@@ -6,9 +6,33 @@
     "lib": ["ES2022"],
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node", "./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"]
+    // Checking inside .d.ts files is off because of what is in node_modules,
+    // and for nothing in this repository: with it off, the only errors left
+    // are fifteen inside @cloudflare/vitest-plugin, tinybench and the
+    // MCP SDK's own declarations. Nothing in src/ or test/ is skipped by this
+    // -- those are checked in full -- and this repository's own declaration
+    // files are clean with it off. That is the property worth keeping: if a
+    // change here needs this flag to pass, the change is wrong. Check with
+    // `pnpm exec tsc --noEmit --skipLibCheck false` and look for src/ or
+    // test/ in the output.
+    "skipLibCheck": true,
+    // What describes this Worker: the file `wrangler types` generates from
+    // wrangler.jsonc -- bindings, plus runtime types matched to the
+    // compatibility date and flags -- and the harness that runs the tests
+    // inside workerd.
+    //
+    // "node" is deliberately NOT here, though @types/node is installed.
+    // Cloudflare's guidance is to add it when you use nodejs_compat, and this
+    // Worker sets that flag -- but for its dependencies at runtime, not for
+    // anything this code says: there is not one `node:` import or node global
+    // in src/ or test/. Including it anyway costs ~143 errors inside
+    // declaration files, because @types/node's web globals and workerd's
+    // runtime types both describe Request, streams and crypto and disagree
+    // about all of them. The package stays installed for vitest.config.ts,
+    // which is outside this project's `include` and therefore typed with the
+    // defaults. Add it back the day something here imports `node:`.
+    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-plugin/types"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]
 }

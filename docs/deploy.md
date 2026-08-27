@@ -34,12 +34,19 @@ the manual path and the detail behind the prompts.
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/lswith/imap-mcp)
 
 The button clones the repository into your account, provisions the D1
-database, both queues and the R2 bucket, prompts for the two required secrets
-(`IMAP_PASSWORD`, `MCP_API_KEY` — the prompts come from
-[`.dev.vars.example`](../.dev.vars.example)), and deploys. Migrations run
-inside the deploy script, so the schema is applied on the first deploy — and
-on every later redeploy after you merge an upstream change, which is what
-keeps a schema change from silently breaking your instance.
+database, both queues and the R2 bucket, **prompts for the four values only
+you can supply** — `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD`, `MCP_API_KEY`,
+read from [`.dev.vars.example`](../.dev.vars.example) — and deploys.
+Migrations run inside the deploy script, so the schema is applied on the first
+deploy, and on every later redeploy after you merge an upstream change, which
+is what keeps a schema change from silently breaking your instance.
+
+The committed `vars` (the sizing knobs and `LOG_LEVEL`) are offered for editing
+in the same flow, at their defaults. `ACCESS_AUD` is deliberately not asked
+for: setting it before the Access application exists locks you out of your own
+instance, so it is an upgrade you make afterwards, not a question during a
+deploy. [configuration.md](./configuration.md) lists every value and where it
+lives.
 
 The button currently deploys the `main` branch; once releases exist
 ([#38](https://github.com/lswith/imap-mcp/issues/38)) it will track the latest
@@ -47,19 +54,14 @@ release instead.
 
 When it finishes you have a Worker at
 `https://imap-mcp.<your-subdomain>.workers.dev` answering `/mcp`, gated by
-your API key. Two things remain before it is *useful*:
+your API key, and pointed at your mailbox. One thing remains:
 
-1. **Tell it about the mailbox.** `IMAP_HOST` and `IMAP_USER` are the two
-   values this repository cannot commit for you — they identify your account.
-   Add them to the `vars` block in your fork's `wrangler.jsonc` (the sizing
-   knobs and `LOG_LEVEL` are already there, at their defaults) or in the
-   dashboard, where `keep_vars` keeps them across redeploys. Every value is
-   named and explained in [`.env.example`](../.env.example). Push, and your
-   fork's continuous deployment redeploys with them.
-2. **Wait for the backfill.** The cron runs hourly and paces itself (about
-   five thousand messages an hour at the defaults), so a large mailbox takes
-   some hours to index. A search that returns nothing right after a deploy is
-   a mailbox not yet indexed, not a broken instance.
+**Wait for the backfill.** The cron runs hourly and paces itself (about five
+thousand messages an hour at the defaults), so a large mailbox takes some hours
+to index. A search that returns nothing right after a deploy is a mailbox not
+yet indexed, not a broken instance — and
+`curl -H "Authorization: Bearer <key>" https://<worker>.workers.dev/status`
+tells you which of the two you are looking at.
 
 Then connect a client:
 
@@ -72,7 +74,7 @@ Then connect a client:
 
 ## The manual path
 
-Fork, clone, `pnpm install`. From then on:
+Fork or clone, `pnpm install`. From then on:
 
 ```bash
 pnpm run deploy    # d1 migrations apply, then wrangler deploy — in that order
@@ -85,6 +87,8 @@ alongside the code and migrates after:
 
 ```bash
 cat > .secrets.env <<DONE        # gitignored
+IMAP_HOST=<e.g. imap.mail.me.com>
+IMAP_USER=<for iCloud, the local part only>
 IMAP_PASSWORD=<app-specific password>
 MCP_API_KEY=<output of: openssl rand -base64 32>
 DONE
@@ -93,36 +97,46 @@ rm .secrets.env
 pnpm run db:migrate:remote
 ```
 
-The deploy will fail, naming the missing names, if either secret is absent —
-`secrets.required` in `wrangler.jsonc` is the guard, and it is why an
-unauthenticated instance is not a state a deploy can reach. Rotate a secret
-any time with `pnpm exec wrangler secret put <NAME>`.
+That is the whole configuration: the same four values the button prompts for,
+set as secrets. Everything else has a committed default. Change one later with
+`pnpm exec wrangler secret put <NAME>` — and note that a deploy never deletes
+a secret, so this survives every redeploy afterwards.
 
-Two write-backs land in your checkout on first deploy, and both are correct
-for a fork: wrangler records the provisioned `database_id` in
-`wrangler.jsonc`, and you add your mailbox host and user to the `vars` block
-there too. Commit both to your fork; never send them upstream.
+The deploy will fail, naming them, if `IMAP_PASSWORD` or `MCP_API_KEY` is
+absent — `secrets.required` in `wrangler.jsonc` is the guard, and it is why an
+unauthenticated instance is not a state a deploy can reach. `IMAP_HOST` and
+`IMAP_USER` are deliberately not on that list, so that an instance configuring
+them as `vars` instead still deploys; an unset mailbox is loud anyway, hourly
+in the logs and in `/status`.
+
+One write-back lands in your checkout on first deploy: wrangler records the
+provisioned `database_id` in `wrangler.jsonc`. It identifies your account, so
+in a fork it is a commit, and **on this repository it stays an uncommitted
+local edit**. Keep that checkout either way — losing the id is how a second
+database gets created on the next deploy.
 
 ## Configuration reference
 
-This repository is public, so **no account-specific values are committed** —
-no account ID, no database id, no audience tag, no mailbox address. Everything
-a deploy needs is either declared by name in `wrangler.jsonc` (resources,
-required secrets) or supplied by you:
+[configuration.md](./configuration.md) is the full list: every value, what it
+does, and which of the three places it belongs in. The short version —
 
-| What | Where it goes |
-| --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | your environment; wrangler reads it directly |
-| `IMAP_PASSWORD`, `MCP_API_KEY` | Worker secrets — the button prompts for them; manually, `wrangler secret put` (or `--secrets-file` on the first deploy) |
-| `IMAP_HOST`, `IMAP_USER` | `vars` in your fork's `wrangler.jsonc`, or the dashboard |
-| `LOG_LEVEL`, `IMAP_PORT`, `SYNC_FOLDERS`, the sizing vars | already in the committed `vars` block at their defaults — change them there, not in the dashboard, which a deploy overwrites |
-| `ACCESS_AUD` | only when upgrading to Cloudflare Access — see [authentication.md](./authentication.md) |
-| The D1 database, queues, R2 bucket | provisioned by the first deploy; the id written back is yours |
+- **The four the deploy asks for** (`IMAP_HOST`, `IMAP_USER`,
+  `IMAP_PASSWORD`, `MCP_API_KEY`) are Worker secrets, listed in
+  [`.dev.vars.example`](../.dev.vars.example), which is what the button reads
+  to build its prompts.
+- **The knobs** (`LOG_LEVEL`, `IMAP_PORT`, `SYNC_FOLDERS`, the sizing vars)
+  are committed in the `vars` block at their defaults. Change them in the
+  file: a deploy overwrites a dashboard edit to any name the config carries.
+- **The optional extras** (`SYNC_SINCE`, `DRAFT_FROM`, `DRAFTS_FOLDER`,
+  `ACCESS_AUD`) are `vars` you add afterwards, in a fork's config or in the
+  dashboard, where `keep_vars` keeps them across deploys.
 
-Locally: secrets go in a gitignored `.dev.vars` (copy
-[`.dev.vars.example`](../.dev.vars.example)), `pnpm run dev` runs the Worker in
-API-key mode, and `pnpm run db:migrate:local` applies the schema to the local
-D1.
+`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` configure wrangler rather
+than the Worker; they go in a gitignored `.env` or your shell.
+
+Locally: copy [`.dev.vars.example`](../.dev.vars.example) to `.dev.vars`
+(gitignored) and fill it in, `pnpm run dev` runs the Worker in API-key mode,
+and `pnpm run db:migrate:local` applies the schema to the local D1.
 
 ## Is it working?
 

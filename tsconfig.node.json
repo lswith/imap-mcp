@@ -1,0 +1,36 @@
+{
+  // The Node half of the repository: the files that configure the tools, run
+  // on your machine, and are never bundled into the Worker. Today that is
+  // vitest.config.ts and nothing else.
+  //
+  // It needs its own project because it is typed against a different runtime,
+  // and which runtime that is has a definite answer: vitest.config.ts runs in
+  // NODE. Vitest is a Node process, and it evaluates this file there; only the
+  // TESTS run inside workerd, which is the whole job of the pool plugin the
+  // file configures. `readD1Migrations` reads the migrations directory off the
+  // disk, which is not something workerd can do at all.
+  //
+  // So one `types` array cannot serve both: @types/node's web globals and
+  // workerd's runtime types disagree about Request, streams and crypto roughly
+  // 143 times, and there are two projects here rather than one compromise.
+  // Pointing this project at the Worker's types instead would be worse than
+  // untidy -- worker-configuration.d.ts declares `typeof import("./src/index")`,
+  // so it drags the entire Worker into a project describing a build file, and
+  // it would let this file reference globals (caches, WebSocketPair) that do
+  // not exist where it actually runs.
+  //
+  // Without this, vitest.config.ts was checked by nothing at all: it sits
+  // outside the root project's `include`, so `const x: number = "no"` in it
+  // was a clean typecheck. The harness that decides how every test runs is
+  // worth as much checking as the tests.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Node, and deliberately not the Worker runtime types: this file never
+    // runs in workerd. The pool's own types come with the import.
+    "types": ["node"],
+    // Vitest reads this file through Vite, which resolves like a bundler.
+    "moduleResolution": "Bundler",
+    "module": "ES2022"
+  },
+  "include": ["vitest.config.ts"]
+}

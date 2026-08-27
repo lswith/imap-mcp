@@ -1,25 +1,53 @@
-# Local secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored).
+# What a deploy asks you for. Four values, and nothing else.
 #
-# In production these are set with `wrangler secret put <NAME>`, NOT in
-# wrangler.jsonc -- that file is committed to a public repository. Both are
-# declared as required in wrangler.jsonc (`secrets.required`), so a deploy
-# fails until they are set, and `wrangler dev` warns when either is missing
-# here.
+# THIS FILE IS THE PROMPT LIST. The "Deploy to Cloudflare" button reads it and
+# asks for each name below as you deploy, so a one-click deploy ends with an
+# instance that can actually reach a mailbox. That is why it holds exactly the
+# values only you can supply -- and why nothing else may be added to it. A name
+# in here becomes a question every deployer has to answer.
+#
+# In particular, NOT in here:
+#   - the sizing knobs and LOG_LEVEL. They have committed defaults in the
+#     `vars` block of wrangler.jsonc, where a deployer can see and change them.
+#   - ACCESS_AUD. Setting it before the Access application exists and works is
+#     the documented lockout (docs/authentication.md): it is the optional
+#     upgrade AFTER a deploy, never a question during one.
+#   - CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN. Those configure wrangler
+#     itself, not the Worker; put them in a gitignored `.env` (see
+#     docs/configuration.md).
+#
+# All four are set as Worker SECRETS. Two of them genuinely are secret; the
+# host and the user are not, and are stored that way on purpose, because the
+# secret store is the only place that is uncommitted (this repository is
+# public, so a mailbox address cannot be committed), untouched by a deploy, and
+# offered by the button's prompt. `env.IMAP_HOST` reads the same either way, so
+# an instance that already sets them as `vars` keeps working unchanged.
+#
+# LOCALLY: copy this file to `.dev.vars` (gitignored) and fill it in;
+# `pnpm run dev` reads it. Values are left empty deliberately -- a blank is
+# refused by name at startup, which is better than a plausible-looking default
+# that silently points at the wrong mailbox.
+#
+# Once deployed, `GET /status` reports which of these are in effect (a secret
+# cannot be read back out of the dashboard). See docs/observability.md.
 
-# App-specific password for the mailbox. Generate one at appleid.apple.com for
-# iCloud. It grants FULL mailbox access, including SMTP send, so treat it as
-# equivalent to the account password and rotate it by revoking the old one.
-IMAP_PASSWORD=dev_only_change_me
+# IMAP hostname. iCloud: imap.mail.me.com
+IMAP_HOST=
 
-# The bearer token MCP clients present in API-key mode (#35). Generate one:
+# Mailbox user. For iCloud, LOGIN takes the LOCAL PART ONLY -- "ada", not
+# "ada@icloud.com". Set DRAFT_FROM as a var if you want drafts written From a
+# full address.
+IMAP_USER=
+
+# App-specific password for that mailbox. iCloud: appleid.apple.com ->
+# Sign-In and Security -> App-Specific Passwords. It grants FULL mailbox access
+# including SMTP send, so treat it as equivalent to the account password and
+# rotate it by revoking the old one. It never reaches a log line (src/log.ts).
+IMAP_PASSWORD=
+
+# The bearer token MCP clients present. Generate one:
 #   openssl rand -base64 32
-# Rotation is replacing this value (locally here; in production with
-# `wrangler secret put MCP_API_KEY`).
-MCP_API_KEY=dev_only_change_me_too
-
-# There is nothing to put here for Cloudflare Access. The gate reads
-# `ctx.access`, which the runtime populates and no file can -- so locally,
-# leave ACCESS_AUD unset and the endpoint runs in API-key mode: point a client
-# at http://localhost:8787/mcp with `Authorization: Bearer <MCP_API_KEY>`.
-# Most work on the MCP tools happens through `pnpm run test` / `test:watch`
-# instead, which drive the handler directly.
+# This is the whole authentication gate until Cloudflare Access is configured,
+# so make it random rather than memorable. Rotate with:
+#   pnpm exec wrangler secret put MCP_API_KEY
+MCP_API_KEY=

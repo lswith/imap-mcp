@@ -2,12 +2,32 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "imap-mcp",
   "main": "src/index.ts",
-  // Pinned to the newest date the toolchain actually runs: the workerd bundled
-  // with @cloudflare/vitest-pool-workers caps out here, and a later date makes
-  // every test fail to boot rather than fail a check. Move it forward only
-  // together with that dependency.
-  "compatibility_date": "2026-08-15",
-  "compatibility_flags": ["nodejs_compat"],
+  // Pinned to the newest date the toolchain actually runs, which is the
+  // workerd inside BOTH halves: wrangler's (the deploy) and the one
+  // @cloudflare/vitest-plugin brings through miniflare (the tests). Both are
+  // workerd 1.20260820.1 as of this commit, and a later date makes every test
+  // fail to boot rather than fail a check, so it moves only when they do --
+  // as it did here, when the test plugin's miniflare went from 5.20260815 to
+  // 5.20260820 and released the 2026-08-15 pin it had been holding.
+  //
+  // Nothing about this Worker's behaviour changes with it: no compatibility
+  // flag defaults between 2026-08-15 and 2026-08-20.
+  "compatibility_date": "2026-08-20",
+  // No compatibility_flags, and Node compatibility is still on. Since
+  // 2026-08-04 the date enables `nodejs_compat` and `nodejs_compat_v2` by
+  // itself, and declaring them again changes nothing -- the tooling ignores
+  // the redundant flags -- so the list was noise claiming to be a decision.
+  //
+  // Confirmed by importing `node:buffer` inside workerd under this exact
+  // config, which resolves and works. (The header of the generated runtime
+  // types is NOT the evidence: it echoes the flags declared here, so it stops
+  // naming nodejs_compat the moment the redundant entry goes, whether or not
+  // the behaviour is still on. It is.)
+  //
+  // What this does change is where that compatibility comes from: the DATE
+  // now carries it. Lowering the date below 2026-08-04 without putting
+  // `nodejs_compat` back would take node:crypto, node:buffer and the rest
+  // away from every dependency that expects them.
   // `logs.invocation_logs` groups every console.log/error emitted during a run
   // into a single timeline in the dashboard (Workers & Pages -> this worker ->
   // Logs) -- the "breadcrumbs" behind an error, at 100% sampling.
@@ -46,9 +66,13 @@
   // throttles and the log level live here, and IMAP_HOST, IMAP_USER,
   // SYNC_SINCE, DRAFT_FROM, DRAFTS_FOLDER and ACCESS_AUD do not -- they name
   // one person's mailbox or one Zero Trust application, and this file is
-  // committed to a public repository. Add those in YOUR FORK (see
-  // .env.example) or in the dashboard; `keep_vars` below is what makes the
-  // second of those survive a deploy.
+  // committed to a public repository. The mailbox pair -- IMAP_HOST and
+  // IMAP_USER -- is asked for AT DEPLOY TIME instead, alongside the two
+  // secrets: .dev.vars.example is the prompt list the "Deploy to Cloudflare"
+  // button reads, and a secret is never committed and never deleted by a
+  // deploy. The rest (SYNC_SINCE, DRAFT_FROM, DRAFTS_FOLDER, ACCESS_AUD) are
+  // vars a deployer adds afterwards, in a fork's config or in the dashboard,
+  // where `keep_vars` below keeps them. See docs/configuration.md.
   //
   // Every value here restates the default in src/sync/config.ts, so this block
   // changes no behaviour -- what it changes is that `wrangler deploy` prints
@@ -108,7 +132,8 @@
   // the id back into this file. It is also what a "Deploy to Cloudflare" button
   // does server-side. So this repo stays free of account-specific values while
   // still declaring everything a deploy needs. The id wrangler writes back into
-  // your checkout is yours: keep it in your fork, don't push it upstream.
+  // your checkout is yours: keep it there, and never push it -- to a fork it
+  // is a commit, to this repository an uncommitted local edit.
   "d1_databases": [
     {
       "binding": "DB",
@@ -170,11 +195,13 @@
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
   //   routes      -- your own zone, if you prefer a custom hostname over
-  //                  workers.dev; see .env.example
+  //                  workers.dev; see docs/configuration.md
   //
   // The `vars` block above carries the knobs. What it deliberately leaves out
   // is everything that identifies you, which src/env.d.ts declares the shape
-  // of instead. Add these in your fork or the dashboard (see .env.example):
+  // of instead. IMAP_HOST and IMAP_USER are prompted for at deploy time (see
+  // .dev.vars.example); these are the optional rest, added as vars in a fork's
+  // config or in the dashboard (docs/configuration.md):
   //   IMAP_HOST, IMAP_USER  -- the mailbox. Without them the cron fails,
   //                            hourly and by name, in the logs
   //   SYNC_SINCE            -- optional ISO date floor
