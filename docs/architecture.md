@@ -388,21 +388,35 @@ generic-by-design requirement is met by the interface instead:
 swapping the client — or the provider — is a change to that file rather than a
 refactor.
 
-What depending rather than vendoring costs is that four behaviours of the
-pinned version are worked around or pinned by tests rather than fixed at the
-source. Filing them upstream is
-[#40](https://github.com/lswith/imap-mcp/issues/40):
+What depending rather than vendoring costs is that defects of the published
+version cannot be fixed at the source. Reporting them upstream is
+[#40](https://github.com/lswith/imap-mcp/issues/40); while the reports wait,
+the dependency pins a git ref of a patched fork
+([lswith/cf-imap](https://github.com/lswith/cf-imap)) that carries one pull
+request per defect, stacked so its `main` can absorb them in order. The pin
+moves back to a registry release when upstream merges. The four defects of
+1.0.0, where each was filed and what fixed it:
 
-| Behaviour | Effect here |
-| --- | --- |
-| `storeFlags` cannot parse the `MODSEQ (n)` RFC 7162 §3.1.3 requires on untagged `FETCH` once CONDSTORE is enabled | a flag write that lands reports zero rows, so `setFlags` discards the `STORE` response and verifies every write with an independent `UID FETCH` |
-| every `iso-8859-*` charset is decoded as ISO-8859-1, ahead of the `TextDecoder` fallback | ISO-8859-15's euro sign arrives as a currency sign; pinned in `test/imap/protocol/mime.test.ts` |
-| a `FETCH` literal is decoded as UTF-8 before the part's charset is known | bodies sent as raw 8-bit (`Content-Transfer-Encoding: 8bit`) lose their non-ASCII characters; anything quoted-printable or base64 is unaffected. Pinned in the same file |
-| the published ESM uses extensionless relative imports | bundlers (workerd, `wrangler deploy`) resolve them; Node's ESM resolver does not, so the Node-side test project has Vite process the package instead |
+| Behaviour of 1.0.0 | Filed | Fixed by |
+| --- | --- | --- |
+| `storeFlags` cannot parse the `MODSEQ (n)` RFC 7162 §3.1.3 requires on untagged `FETCH` once CONDSTORE is enabled, so a flag write that lands reports zero rows | drafted for upstream | [lswith/cf-imap#1](https://github.com/lswith/cf-imap/pull/1) |
+| every `iso-8859-*` charset (and KOI8) is decoded as ISO-8859-1, ahead of the `TextDecoder` fallback — ISO-8859-15's euro sign arrives as a currency sign | [Exerra/cf-imap#8](https://github.com/Exerra/cf-imap/issues/8) | [lswith/cf-imap#2](https://github.com/lswith/cf-imap/pull/2) |
+| a `FETCH` literal is decoded as UTF-8 before the part's charset is known, so raw 8-bit bodies (`Content-Transfer-Encoding: 8bit`) lose their non-ASCII characters | drafted for upstream | [lswith/cf-imap#3](https://github.com/lswith/cf-imap/pull/3) |
+| the published ESM uses extensionless relative imports — bundlers resolve them, Node's ESM resolver does not | drafted for upstream | [lswith/cf-imap#6](https://github.com/lswith/cf-imap/pull/6) |
 
-The tests that pin these are contract tests over a pinned dependency: they are
-what turns an upgrade, or a swap to another client, into a red build rather
-than a quiet change in what fifteen years of mail decodes to.
+(The fork also carries [lswith/cf-imap#4](https://github.com/lswith/cf-imap/pull/4)
+and [#5](https://github.com/lswith/cf-imap/pull/5), fixing
+[Exerra/cf-imap#9](https://github.com/Exerra/cf-imap/issues/9) — threading
+headers missing from header-only fetches — and
+[Exerra/cf-imap#10](https://github.com/Exerra/cf-imap/issues/10) — quadratic
+stream buffering.)
+
+`setFlags` still discards the `STORE` response and verifies every write with
+an independent `UID FETCH`: the read-back is required by #8/#12 whatever the
+client reports. The charset tests in `test/imap/protocol/mime.test.ts` now
+pin the *correct* decodings; they are contract tests over a pinned
+dependency — what turns an upgrade, or a swap to another client, into a red
+build rather than a quiet change in what fifteen years of mail decodes to.
 
 A spike settled the one question the whole architecture was contingent on —
 **can a Cloudflare Worker speak IMAP to iCloud at all?** It can: TLS and

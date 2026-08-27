@@ -120,6 +120,8 @@ production run against a real mailbox on the current architecture: that is
 MIT — see [LICENSE](./LICENSE). The IMAP protocol client is
 [`cf-imap`](https://github.com/Exerra/cf-imap) by Exerra, also MIT; its
 licence text ships in the tarball but no `license` field is set in its
-`package.json`, so licence scanners misreport it —
+`package.json`, so licence scanners misreport it. The build currently
+installs a patched fork ([lswith/cf-imap](https://github.com/lswith/cf-imap))
+while its fixes are upstreamed —
 [`docs/architecture.md`](./docs/architecture.md#the-imap-client) has the
-detail and the known workarounds this repo pins with tests.
+defect table, where each was filed, and which pull request fixes it.

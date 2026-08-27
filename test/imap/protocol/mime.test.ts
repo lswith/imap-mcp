@@ -117,40 +117,32 @@ describe("charsets", () => {
     expect(message.text).toBe("He said “hello” — and left.\r\n");
   });
 
-  it(
-    "KNOWN LIMITATION: every iso-8859-* charset is decoded as ISO-8859-1, so " +
-      "ISO-8859-15's euro sign comes back as a currency sign",
-    async () => {
-      // cf-imap's decodeBytes matches the `iso-8859-` prefix and runs a
-      // latin-1 byte loop before ever reaching its TextDecoder fallback, so
-      // 0xA4 decodes as U+00A4 rather than U+20AC. workerd's TextDecoder
-      // supports the whole WHATWG encoding set, so the shortcut is what loses
-      // the character, not the runtime. Pinned here rather than hidden; see
-      // the limitations section in README.md.
-      const message = await fetchOne(fixtures.iso885915);
+  it("decodes ISO-8859-15, euro sign included", async () => {
+    // Unpatched cf-imap 1.0.0 matched the `iso-8859-` prefix and ran a
+    // latin-1 byte loop before ever reaching its TextDecoder fallback, so
+    // 0xA4 decoded as U+00A4 (¤) rather than U+20AC (€). Fixed by the fork
+    // this repo pins (lswith/cf-imap#2, upstream report Exerra/cf-imap#8);
+    // this test is the contract that an upgrade or client swap must keep
+    // decoding the euro sign correctly.
+    const message = await fetchOne(fixtures.iso885915);
 
-      expect(message.text).toBe("Total: 42¤\r\n");
-      expect(message.text).not.toContain("€");
-    },
-  );
+    expect(message.text).toBe("Total: 42€\r\n");
+    expect(message.text).not.toContain("¤");
+  });
 
-  it(
-    "KNOWN LIMITATION: a raw 8-bit body loses its non-ASCII bytes, because " +
-      "the FETCH literal is UTF-8 decoded before the part's charset is known",
-    async () => {
-      // The FETCH literal is decoded as UTF-8 before anything knows the part's
-      // charset, so a lone 0xE9 becomes U+FFFD; the latin-1 pass then decodes
-      // that replacement character's own UTF-8 bytes, and "é" arrives as
-      // "ï¿½". Only bodies sent with no transfer encoding
-      // (Content-Transfer-Encoding: 8bit) are affected — quoted-printable and
-      // base64 are 7-bit on the wire and survive, which covers nearly all
-      // modern mail. Old archives are where this shows up.
-      const message = await fetchOne(fixtures.raw8Bit);
+  it("keeps the non-ASCII bytes of a raw 8-bit body", async () => {
+    // Unpatched cf-imap 1.0.0 decoded the FETCH literal as UTF-8 before
+    // anything knew the part's charset, so a lone 0xE9 became U+FFFD and
+    // "é" arrived as "ï¿½". Only bodies sent with no transfer encoding
+    // (Content-Transfer-Encoding: 8bit) were affected — quoted-printable and
+    // base64 are 7-bit on the wire and always survived. Fixed by the fork
+    // this repo pins (lswith/cf-imap#3): literals stay bytes until each
+    // part's declared charset is known.
+    const message = await fetchOne(fixtures.raw8Bit);
 
-      expect(message.text).toContain("Cafï¿½ au lait.");
-      expect(message.text).not.toContain("Café");
-    },
-  );
+    expect(message.text).toContain("Café au lait.");
+    expect(message.text).not.toContain("ï¿½");
+  });
 });
 
 describe("malformed input", () => {

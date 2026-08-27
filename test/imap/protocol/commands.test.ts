@@ -200,9 +200,9 @@ describe("writes", () => {
 
     const result = await mailbox.setFlags(1, ["Flagged"]);
 
-    // Under CONDSTORE the STORE confirmation carries a MODSEQ the client
-    // cannot parse, so the STORE response is worthless — this value can only
-    // have come from the read-back.
+    // The STORE response is discarded by design (the read-back is what #8
+    // and #12 require), so this value can only have come from the read-back
+    // — asserted below by command order.
     expect(result).toEqual([{ uid: 1, flags: ["Flagged"] }]);
 
     const store = server.commands.findIndex((command) => command.includes("UID STORE"));
