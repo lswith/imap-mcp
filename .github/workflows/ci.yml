@@ -8,20 +8,35 @@ name: CI
 # check doesn't hide the others -- a full picture per run rather than a
 # fix-push-discover-the-next-one loop.
 #
-# PR-only by design: every check here is deterministic on the code, so
-# re-running them on the merge commit is duplication. Nothing deploys from this
-# workflow. The one workflow that does run on pushes to main is Release Please
-# (release-please.yml), which proposes release PRs -- it duplicates nothing
-# here, and the two never run on the same event.
+# It runs twice: on the pull request, where the `ci` job is the required check
+# that gates the merge, and again on main afterwards. The second run is not the
+# duplicate it looks like. A pull request is tested against the base it forked
+# from, so two of them that pass separately can still break main together -- a
+# rename in one, a new caller in the other -- and the merged commit is the
+# first time that combination is built. It is also the only check here that
+# does not depend on a repository setting staying as it is: if the ruleset on
+# main is ever changed, relaxed or bypassed, this is what still reports.
+#
+# Nothing deploys from this workflow. Release Please (release-please.yml) also
+# runs on pushes to main; the two share the event and duplicate nothing.
+#
+# A pull request cancels its own superseded runs, since only the tip is being
+# gated. A push to main is grouped by commit instead of by ref, so it shares a
+# group with nothing: it cannot be cancelled by a later merge, and cannot be
+# dropped as a pending run that a newer one replaces -- which GitHub does
+# whatever cancel-in-progress says. That is what makes "main was green at this
+# commit" a fact that can be looked up afterwards.
 
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:

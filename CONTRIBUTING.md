@@ -70,6 +70,44 @@ Conventions in brief: TypeScript throughout, Biome for lint and format
 generated from them), and nothing account-specific is ever committed — this
 repository is public.
 
+## How a change lands
+
+Everything reaches `main` through a pull request — human, agent or release
+automation alike. Nothing pushes to it directly, and the rules that say so
+bind the maintainer too:
+
+- **A pull request is required**, with zero required approvals. Zero is not an
+  oversight: GitHub does not let anyone approve their own pull request, and a
+  one-maintainer repository that required an approval would be one that could
+  never merge. The gate here is the checks, not a second pair of eyes that
+  does not exist.
+- **The `ci` job must be green.** It is the required status check, and it runs
+  again on `main` after the merge — see the comment at the top of
+  [`ci.yml`](./.github/workflows/ci.yml) for why that second run is not
+  redundant. `actionlint` is deliberately *not* required: it only runs when
+  `.github/workflows/**` changes, and a required check that never reports
+  blocks a pull request for ever.
+- **`main` cannot be force-pushed or deleted.**
+
+Those rules live in a repository ruleset, which is a GitHub setting rather
+than a file in the repository. [`.github/rulesets/main.json`](./.github/rulesets/main.json)
+is a copy of it in GitHub's own export format — reviewable in a diff, and
+importable under Settings → Rules → Rulesets → New ruleset → Import. It is a
+record, not the enforcement; if the two ever disagree, the setting is what is
+running.
+
+Write access is held by the maintainer alone. That is what actually stops a
+contributor merging their own pull request — permissions do, not the ruleset —
+so the ruleset is aimed at the accounts and agents that *do* have write, which
+on a repository where an agent opens most of the pull requests is the case
+worth constraining.
+
+So the contribution path is a fork: push your branch there, open a pull
+request against `main`, and CI runs on it. A pull request from a fork runs
+with a read-only token and no access to this repository's secrets — `ci.yml`
+triggers on `pull_request` rather than `pull_request_target`, which is what
+makes that true, and it needs to stay that way.
+
 ## Issues and triage
 
 Labels run on three axes: what a thing is (`bug`, `enhancement`, …), where it
