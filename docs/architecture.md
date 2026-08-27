@@ -389,27 +389,29 @@ swapping the client — or the provider — is a change to that file rather than
 refactor.
 
 What depending rather than vendoring costs is that defects of the published
-version cannot be fixed at the source. Reporting them upstream is
-[#40](https://github.com/lswith/imap-mcp/issues/40); while the reports wait,
-the dependency pins a git ref of a patched fork
-([lswith/cf-imap](https://github.com/lswith/cf-imap)) that carries one pull
-request per defect, stacked so its `main` can absorb them in order. The pin
-moves back to a registry release when upstream merges. The four defects of
-1.0.0, where each was filed and what fixed it:
+version cannot be fixed at the source. Filing them upstream was
+[#40](https://github.com/lswith/imap-mcp/issues/40): every defect is reported
+on Exerra/cf-imap with a pull request opened upstream from a branch of the
+patched fork ([lswith/cf-imap](https://github.com/lswith/cf-imap)), whose
+`main` has already merged all of them. The dependency pins that fork at an
+exact commit; the pin moves back to a registry release when upstream merges.
+The four defects of 1.0.0, where each is filed and the upstream PR that
+fixes it:
 
 | Behaviour of 1.0.0 | Filed | Fixed by |
 | --- | --- | --- |
-| `storeFlags` cannot parse the `MODSEQ (n)` RFC 7162 §3.1.3 requires on untagged `FETCH` once CONDSTORE is enabled, so a flag write that lands reports zero rows | drafted for upstream | [lswith/cf-imap#1](https://github.com/lswith/cf-imap/pull/1) |
-| every `iso-8859-*` charset (and KOI8) is decoded as ISO-8859-1, ahead of the `TextDecoder` fallback — ISO-8859-15's euro sign arrives as a currency sign | [Exerra/cf-imap#8](https://github.com/Exerra/cf-imap/issues/8) | [lswith/cf-imap#2](https://github.com/lswith/cf-imap/pull/2) |
-| a `FETCH` literal is decoded as UTF-8 before the part's charset is known, so raw 8-bit bodies (`Content-Transfer-Encoding: 8bit`) lose their non-ASCII characters | drafted for upstream | [lswith/cf-imap#3](https://github.com/lswith/cf-imap/pull/3) |
-| the published ESM uses extensionless relative imports — bundlers resolve them, Node's ESM resolver does not | drafted for upstream | [lswith/cf-imap#6](https://github.com/lswith/cf-imap/pull/6) |
+| `storeFlags` cannot parse the `MODSEQ (n)` RFC 7162 §3.1.3 requires on untagged `FETCH` once CONDSTORE is enabled, so a flag write that lands reports zero rows | [Exerra/cf-imap#11](https://github.com/Exerra/cf-imap/issues/11) | [Exerra/cf-imap#14](https://github.com/Exerra/cf-imap/pull/14) |
+| every `iso-8859-*` charset (and KOI8) is decoded as ISO-8859-1, ahead of the `TextDecoder` fallback — ISO-8859-15's euro sign arrives as a currency sign | [Exerra/cf-imap#8](https://github.com/Exerra/cf-imap/issues/8) | [Exerra/cf-imap#15](https://github.com/Exerra/cf-imap/pull/15) |
+| a `FETCH` literal is decoded as UTF-8 before the part's charset is known, so raw 8-bit bodies (`Content-Transfer-Encoding: 8bit`) lose their non-ASCII characters | [Exerra/cf-imap#12](https://github.com/Exerra/cf-imap/issues/12) | [Exerra/cf-imap#16](https://github.com/Exerra/cf-imap/pull/16) |
+| the published ESM uses extensionless relative imports — bundlers resolve them, Node's ESM resolver does not | [Exerra/cf-imap#13](https://github.com/Exerra/cf-imap/issues/13) | [Exerra/cf-imap#19](https://github.com/Exerra/cf-imap/pull/19) |
 
-(The fork also carries [lswith/cf-imap#4](https://github.com/lswith/cf-imap/pull/4)
-and [#5](https://github.com/lswith/cf-imap/pull/5), fixing
+(Two more defects found on the way are filed and fixed the same way:
 [Exerra/cf-imap#9](https://github.com/Exerra/cf-imap/issues/9) — threading
-headers missing from header-only fetches — and
+headers missing from header-only fetches — by
+[Exerra/cf-imap#17](https://github.com/Exerra/cf-imap/pull/17), and
 [Exerra/cf-imap#10](https://github.com/Exerra/cf-imap/issues/10) — quadratic
-stream buffering.)
+stream buffering — by
+[Exerra/cf-imap#18](https://github.com/Exerra/cf-imap/pull/18).)
 
 `setFlags` still discards the `STORE` response and verifies every write with
 an independent `UID FETCH`: the read-back is required by #8/#12 whatever the

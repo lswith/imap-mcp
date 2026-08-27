@@ -48,10 +48,11 @@ than accumulating workarounds here; the harness test is what pins the
 behaviour in the meantime.
 
 The fallback for an unmerged upstream fix is a patched fork, not a
-workaround: the fix lands as a pull request on
-[lswith/cf-imap](https://github.com/lswith/cf-imap) (one PR per defect, each
-also reported upstream), and `package.json` pins the git ref that carries it
-— the fork's `prepare` script builds the package at install time. The pin
+workaround: the fix lands on a branch of
+[lswith/cf-imap](https://github.com/lswith/cf-imap) and is opened as a pull
+request against upstream (one issue and one PR per defect); the fork's
+`main` merges it at once, and `package.json` pins the fork ref that carries
+it — the fork's `prepare` script builds the package at install time. The pin
 moves back to a registry release when upstream merges, and the
 harness tests, which assert the *correct* behaviour, are what make that
 switch safe.

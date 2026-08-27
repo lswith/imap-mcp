@@ -98,7 +98,7 @@ export default defineConfig({
               // `cloudflare:sockets` alias above applies inside the package
               // (aliases don't reach externalized modules). The pinned fork
               // also fixed the extensionless relative imports that used to
-              // make Node reject the published ESM outright (lswith/cf-imap#6).
+              // make Node reject the published ESM outright (Exerra/cf-imap#19).
               inline: ["cf-imap"],
             },
           },
