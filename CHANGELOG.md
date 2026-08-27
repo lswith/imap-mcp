@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/lswith/imap-mcp/compare/v0.1.0...v0.2.0) (2026-08-27)
+
+
+### Features
+
+* ask for the mailbox at deploy time, in one prompt list ([#57](https://github.com/lswith/imap-mcp/issues/57)) ([311e112](https://github.com/lswith/imap-mcp/commit/311e112e635e932499b43223d62384418b29973b))
+* make a deployed instance observable — /status, log levels, vars ([#53](https://github.com/lswith/imap-mcp/issues/53)) ([b5e4a62](https://github.com/lswith/imap-mcp/commit/b5e4a62ed22838029905438f3c99ac87d80b36db))
+
+
+### Bug Fixes
+
+* pin cf-imap to the patched fork carrying the [#40](https://github.com/lswith/imap-mcp/issues/40) defect fixes ([#55](https://github.com/lswith/imap-mcp/issues/55)) ([9a508db](https://github.com/lswith/imap-mcp/commit/9a508dbae3297f4a4b23cc7121d751c15e5656e1))
+
 ## 0.1.0 (2026-08-27)
 
 
