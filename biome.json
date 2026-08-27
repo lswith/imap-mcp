@@ -12,7 +12,8 @@
       "!**/dist",
       "!**/.wrangler",
       "!**/worker-configuration.d.ts",
-      "!**/coverage"
+      "!**/coverage",
+      "!.release-please-manifest.json"
     ]
   },
   "linter": {
