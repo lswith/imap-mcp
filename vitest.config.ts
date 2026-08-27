@@ -69,6 +69,7 @@ export default defineConfig({
             "test/sync/**/*.test.ts",
             "test/mcp/**/*.test.ts",
             "test/imap/unit/**/*.test.ts",
+            "test/repo/**/*.test.ts",
           ],
           setupFiles: ["./test/apply-migrations.ts"],
           // A single CI flake gets retried instead of failing the build, while

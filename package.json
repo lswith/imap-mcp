@@ -8,7 +8,7 @@
   "packageManager": "pnpm@11.5.2",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "pnpm run db:migrate:remote && wrangler deploy",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "types": "wrangler types",
@@ -18,8 +18,8 @@
     "test:coverage": "vitest run --coverage",
     "build": "wrangler deploy --dry-run",
     "dead-code": "knip",
-    "db:migrate:local": "wrangler d1 migrations apply imap-mcp --local",
-    "db:migrate:remote": "wrangler d1 migrations apply imap-mcp --remote"
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",

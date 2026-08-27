@@ -52,7 +52,7 @@ pnpm run dead-code   # knip
 pnpm run build       # wrangler deploy --dry-run
 
 pnpm run dev         # wrangler dev
-pnpm run deploy      # wrangler deploy
+pnpm run deploy      # d1 migrations apply + wrangler deploy, in that order (#36)
 
 pnpm run db:migrate:local    # wrangler d1 migrations apply, local D1
 pnpm run db:migrate:remote   # ... and the deployed one
@@ -64,7 +64,12 @@ that touches D1 inside the real Worker runtime against the repo's own
 scripted in-memory IMAP server under Node, by aliasing `cloudflare:sockets` —
 a substitution impossible inside workerd, where that module is a runtime
 built-in. Real protocol coverage belongs in `test/imap/protocol`; the sync
-tests drive a fake `Mailbox`.
+tests drive a fake `Mailbox`. `test/repo` holds the manifest assertions from
+#36: migrations are applied by the D1 *binding* name (Cloudflare's deploy
+buttons let a user rename the database, so a command naming it breaks for
+exactly those users) and run inside the `deploy` script, before the deploy —
+which is what applies schema changes on the button path and on every Workers
+Builds redeploy of a fork.
 
 ## Conventions
 
