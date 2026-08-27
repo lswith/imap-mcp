@@ -6,8 +6,16 @@
     "lib": ["ES2022"],
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
     "noEmit": true,
+    // Checking inside .d.ts files is off because of what is in node_modules,
+    // not because of anything here: @types/node's web globals and workerd's
+    // runtime types both describe Request, streams and crypto, and disagree
+    // about 150 times. Nothing in src/ or test/ is skipped by this — those are
+    // checked in full — and the repo's own declaration files are clean with it
+    // off, which is a property worth keeping: if a change here needs this flag
+    // to pass, the change is wrong. `pnpm exec tsc --noEmit --skipLibCheck
+    // false` and look for src/ or test/ in the output.
+    "skipLibCheck": true,
     "types": ["node", "./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]

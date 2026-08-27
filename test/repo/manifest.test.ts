@@ -65,6 +65,29 @@ describe("the package manifest's deploy sequence", () => {
  * the audience during the deploy that was supposed to create the application
  * it names — the documented lockout.
  */
+/**
+ * `wrangler types` describes the committed `vars` block, and how it describes
+ * it is a choice with consequences.
+ *
+ * By default it emits the literal value from the file — `SYNC_FOLDERS:
+ * "Archive"` — which asserts that every instance runs the committed default.
+ * That is false of every deployer who edited the dashboard, changed it in a
+ * fork, or answered the deploy prompt, and it makes `env.SYNC_FOLDERS ===
+ * "Sent"` an impossible-comparison error in code that is plainly possible.
+ *
+ * The fix used to be a second declaration of the same names in src/env.d.ts,
+ * which is two declarations of one interface property: a real TS2320 that only
+ * `skipLibCheck` was hiding. `--strict-vars=false` removes the reason for it —
+ * so the flag is what keeps that duplication from being needed again, and it
+ * lives in a script rather than in a memory.
+ */
+describe("the type-generation flags", () => {
+  it("generates generic var types rather than the literals in the config", () => {
+    expect(pkg.scripts.types).toContain("--strict-vars=false");
+    expect(pkg.scripts.typecheck).toContain("--strict-vars=false");
+  });
+});
+
 describe("the deploy prompt list", () => {
   const prompted = Object.keys(
     Object.fromEntries(
