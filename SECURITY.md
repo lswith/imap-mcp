@@ -30,10 +30,12 @@ promised, however plausible it sounds.
   sync path goes through a scrubber that removes the app-specific password in
   each form it could come back off the wire — plaintext, quoted, and SASL
   base64 — including error paths, and a test proves it.
-- **An authentication failure against the mailbox is never retried
-  automatically.** A revoked app-specific password re-attempted at queue speed
-  — or through a tool a model can call in a loop — is how an Apple ID gets
-  locked, so that failure aborts loudly instead.
+- **An authentication failure against the mailbox aborts the run and is not
+  retried within it.** A revoked app-specific password re-attempted at queue
+  speed — or through a tool a model can call in a loop — is how an Apple ID
+  gets locked, so the cron aborts without retry, a queue batch is acked rather
+  than replayed, and a write tool refuses once. The next hourly cron tick does
+  attempt a fresh login; what is guaranteed is one attempt per hour, not zero.
 - **Writes are narrow and audited.** There is no send (no SMTP client exists
   in the codebase) and no delete tool; `\Deleted` is reachable only inside a
   confirmed move. Trash and Junk are refused as destinations. Every write
