@@ -46,9 +46,11 @@
   // throttles and the log level live here, and IMAP_HOST, IMAP_USER,
   // SYNC_SINCE, DRAFT_FROM, DRAFTS_FOLDER and ACCESS_AUD do not -- they name
   // one person's mailbox or one Zero Trust application, and this file is
-  // committed to a public repository. Add those in YOUR FORK (see
-  // .env.example) or in the dashboard; `keep_vars` below is what makes the
-  // second of those survive a deploy.
+  // committed to a public repository. Add those in a fork (see .env.example)
+  // or in the dashboard; `keep_vars` below is what makes the second of those
+  // survive a deploy -- and the dashboard is the ONLY option when what is
+  // being deployed is this repository rather than a fork of it, which is the
+  // case for whoever maintains it (docs/deploy.md).
   //
   // Every value here restates the default in src/sync/config.ts, so this block
   // changes no behaviour -- what it changes is that `wrangler deploy` prints
@@ -108,7 +110,8 @@
   // the id back into this file. It is also what a "Deploy to Cloudflare" button
   // does server-side. So this repo stays free of account-specific values while
   // still declaring everything a deploy needs. The id wrangler writes back into
-  // your checkout is yours: keep it in your fork, don't push it upstream.
+  // your checkout is yours: keep it there, and never push it -- to a fork it
+  // is a commit, to this repository an uncommitted local edit.
   "d1_databases": [
     {
       "binding": "DB",
@@ -174,7 +177,8 @@
   //
   // The `vars` block above carries the knobs. What it deliberately leaves out
   // is everything that identifies you, which src/env.d.ts declares the shape
-  // of instead. Add these in your fork or the dashboard (see .env.example):
+  // of instead. Add these in a fork, or -- deploying this repository itself --
+  // in the dashboard or as secrets (see .env.example, docs/deploy.md):
   //   IMAP_HOST, IMAP_USER  -- the mailbox. Without them the cron fails,
   //                            hourly and by name, in the logs
   //   SYNC_SINCE            -- optional ISO date floor

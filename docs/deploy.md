@@ -53,7 +53,9 @@ your API key. Two things remain before it is *useful*:
    values this repository cannot commit for you — they identify your account.
    Add them to the `vars` block in your fork's `wrangler.jsonc` (the sizing
    knobs and `LOG_LEVEL` are already there, at their defaults) or in the
-   dashboard, where `keep_vars` keeps them across redeploys. Every value is
+   dashboard, where `keep_vars` keeps them across redeploys — the second is
+   the only option if you are deploying this repository rather than a fork of
+   it, since its files are public. Every value is
    named and explained in [`.env.example`](../.env.example). Push, and your
    fork's continuous deployment redeploys with them.
 2. **Wait for the backfill.** The cron runs hourly and paces itself (about
@@ -103,6 +105,36 @@ for a fork: wrangler records the provisioned `database_id` in
 `wrangler.jsonc`, and you add your mailbox host and user to the `vars` block
 there too. Commit both to your fork; never send them upstream.
 
+## Deploying this repository itself
+
+The paragraph above assumes a fork, and one deployer it does not describe is
+the one running `pnpm run deploy` **from this repository** — its maintainer,
+or anyone who cloned it rather than forking it. For them the advice inverts:
+there is no private fork to hold private values, and every file here is
+public, so the mailbox settings must live somewhere a commit cannot reach.
+
+Two places do, and neither is touched by a deploy:
+
+1. **Dashboard variables** — Workers & Pages → your Worker → Settings →
+   Variables. `keep_vars` in `wrangler.jsonc` is what makes this safe: a
+   deploy leaves every variable the config does not name alone. Without it,
+   `wrangler deploy` deletes them, and the Worker keeps answering `/mcp`
+   while the cron quietly stops finding a mailbox.
+2. **Worker secrets** — `pnpm exec wrangler secret put IMAP_HOST`. A host and
+   a username are not secrets in the security sense, but the secret store has
+   exactly the properties wanted here: never committed, never deleted by a
+   deploy, and read as `env.IMAP_HOST` like any variable. The cost is that a
+   secret cannot be read back, so the dashboard stops being able to tell you
+   what is configured.
+
+Either way, `GET /status` is what tells you which values are actually in
+effect afterwards — see [observability.md](./observability.md).
+
+The `database_id` write-back needs the same care: it identifies your account,
+so on this repository it stays an **uncommitted local modification** to
+`wrangler.jsonc` rather than something to commit. Keep that checkout, because
+losing the id is how a second database gets created on the next deploy.
+
 ## Configuration reference
 
 This repository is public, so **no account-specific values are committed** —
@@ -114,7 +146,7 @@ required secrets) or supplied by you:
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | your environment; wrangler reads it directly |
 | `IMAP_PASSWORD`, `MCP_API_KEY` | Worker secrets — the button prompts for them; manually, `wrangler secret put` (or `--secrets-file` on the first deploy) |
-| `IMAP_HOST`, `IMAP_USER` | `vars` in your fork's `wrangler.jsonc`, or the dashboard |
+| `IMAP_HOST`, `IMAP_USER` | `vars` in a fork's `wrangler.jsonc`; deploying this repository itself, the dashboard or `wrangler secret put` — see [above](#deploying-this-repository-itself) |
 | `LOG_LEVEL`, `IMAP_PORT`, `SYNC_FOLDERS`, the sizing vars | already in the committed `vars` block at their defaults — change them there, not in the dashboard, which a deploy overwrites |
 | `ACCESS_AUD` | only when upgrading to Cloudflare Access — see [authentication.md](./authentication.md) |
 | The D1 database, queues, R2 bucket | provisioned by the first deploy; the id written back is yours |
