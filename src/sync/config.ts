@@ -119,16 +119,17 @@ export function readSyncConfig(env: Env): SyncConfig {
  * indexing what its owner expects actually raises — and until now the only way
  * to answer it was to read the deploy that set the vars.
  *
- * The password is not here, and neither is the username. The password because
- * it must never reach a log line at all; the username because a log store is a
- * place mail-adjacent identifiers accumulate for no diagnostic gain — nothing
- * about a tick reads differently for knowing whose mailbox it is. The status
- * document does name it (src/status.ts): that answer goes to one authenticated
- * caller who asked, which is a different thing from writing it down hourly.
+ * Which folders and at what pace, and nothing that says whose mailbox it is:
+ * not the password, which must never reach a log line at all; not the
+ * username; and not the host either, which on a custom domain names an
+ * organisation. None of the three change how a tick reads. Both of the last
+ * two are still reachable when they are the question — the host on the
+ * connection line at `debug` (src/sync/session.ts), and both in the status
+ * document, which answers one authenticated caller who asked rather than
+ * writing it down hourly.
  */
 export function describeSyncConfig(config: SyncConfig): string {
   const parts = [
-    `${config.host}:${config.port}`,
     `folders ${config.folders.join(", ")}`,
     `${config.chunkUids} uids/range`,
     `${config.chunkSize} messages/fetch`,

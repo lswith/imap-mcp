@@ -59,8 +59,8 @@ make itself passed, `503` when one did not, so a shell can branch on it.
         "oldest": "2008-04-29T11:03:08.000Z",
         "newest": "2026-08-26T08:41:30.000Z",
         "lastWrite": "2026-08-27T20:07:13.000Z",
-        "converged": false,               // watermark has reached uidNext - 1
-        "stalled": true                   // rows above a watermark that stopped
+        "highestUid": 45919,              // the highest uid with a row
+        "converged": false                // watermark has reached uidNext - 1
       }
     ]
   },
@@ -76,8 +76,8 @@ make itself passed, `503` when one did not, so a shell can branch on it.
 | `schema.ok: false` | Migrations never ran: `pnpm run db:migrate:remote`. Every tool would otherwise fail with a missing-table error. |
 | `index.messages: 0`, config fine | Nothing has been indexed yet. The cron runs hourly; wait for the next tick and look again. |
 | `converged: true` | Done. The folder is fully indexed and the hourly tick is nearly free. |
-| `converged: false`, `stalled: false` | A backfill in progress. Roughly 5,000 messages an hour at the defaults. |
-| `stalled: true` | **The one that needs you.** See [When a folder stalls](#when-a-folder-stalls). |
+| `converged: false` | A backfill in progress. Roughly 5,000 messages an hour at the defaults. |
+| `watermark` unchanged between two reads an hour apart | **The one that needs you.** See [When a folder stalls](#when-a-folder-stalls). |
 | `staleRows` large | The folder was renumbered upstream (`UIDVALIDITY` changed); those rows are unreachable and the folder is re-indexing from uid 1. |
 | `writes.failed` climbing | The write tools are being refused. Every attempt is in the `write_log` table with its reason. |
 
@@ -117,7 +117,7 @@ Every line is tagged with the entry point that wrote it, which is what makes
 A healthy hour looks like this:
 
 ```
-[cron] starting: imap.mail.me.com:993; folders Archive; 100 uids/range; 10 messages/fetch; ...
+[cron] starting: folders Archive; 100 uids/range; 10 messages/fetch; 5000-uid window; ...
 [queue] stored 100 messages, 4 attachments of Archive 4701:4800
 [cron] Archive: 5000 uids from 4701, 50 ranges queued (uidvalidity 1, watermark 9700) — 50 ranges in 3812ms
 ```
@@ -154,10 +154,19 @@ from writing it down hourly.
 
 ## When a folder stalls
 
-`stalled: true` means rows exist above the watermark while the watermark itself
-has stopped moving. The Worker is re-fetching ranges it has already fetched,
-every hour, for ever, and no error is raised anywhere — which is precisely why
-it needs naming.
+A stall is the watermark not moving *between ticks* while the folder keeps
+queueing work: the Worker re-fetches ranges it has already fetched, every hour,
+for ever, and no error is raised anywhere — which is precisely why it needs
+naming.
+
+Note what that is **not**: a watermark below `highestUid` at a single moment.
+Every healthy tick looks like that, because enumeration records the watermark
+from what was complete when it walked, and the consumers it queued store the
+ranges above it afterwards. Two observations tell them apart, which is why
+`/status` reports both numbers and asserts nothing about the distance between
+them. Read it twice an hour apart — if `lastSyncedAt` advanced and `watermark`
+did not, the folder is stalled — or let the Worker say so itself, which it does
+with the two warnings below.
 
 The mechanism: work is queued by *gap detection*, which counts indexed rows per
 100-uid bucket. A bucket the server returns 100 uids for but which only ever

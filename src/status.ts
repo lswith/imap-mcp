@@ -19,10 +19,12 @@
  *                          tool into an error about a missing table.
  *   Is it indexing?        `index.folders[].messages` against `uidNext`, plus
  *                          when the last row was written.
- *   Is it converging?      `converged` and `stalled`. A backfill that is
- *                          working climbs; one that is stuck re-queues the
- *                          same ranges hourly and looks identical in the
- *                          request count.
+ *   Is it converging?      `converged`, and `watermark` against `highestUid`
+ *                          and `uidNext`. A backfill that is working climbs;
+ *                          one that is stuck re-queues the same ranges hourly
+ *                          and looks identical in the request count — the two
+ *                          are told apart by reading twice, or by the `[cron]`
+ *                          warning, never by one number here (#54).
  *   Which credential?      `auth.mode` — the one thing a 401 will not tell a
  *                          caller, since precedence means a good API key is
  *                          refused outright once ACCESS_AUD is set.
@@ -72,12 +74,20 @@ type FolderStatus = {
   /** The watermark has reached the top of the uid space: nothing left to do. */
   converged: boolean;
   /**
-   * Rows exist above the watermark while the watermark has not moved past
-   * them — the folder is fetching ranges it has already fetched, hourly. It is
-   * derived rather than recorded because it is a relationship between two
-   * numbers that are each individually fine. The condition itself is #54.
+   * The highest uid this folder has a row for, under the current uidvalidity.
+   *
+   * Reported beside the watermark rather than compared with it here. The
+   * distance between the two is the first thing to look at when a folder is
+   * not converging (#54) — but it is NOT by itself the stall: a healthy
+   * backfill spends every tick in exactly this shape, because enumeration
+   * records the watermark from what was complete when it walked, and the
+   * consumers it queued then store the ranges above it. The difference
+   * between the two cases is whether the watermark MOVES between ticks, which
+   * one snapshot cannot see and this document must not pretend to. Read it
+   * twice an hour apart, or read the `[cron]` warning, which compares the
+   * watermark it just computed against the one it resumed from.
    */
-  stalled: boolean;
+  highestUid: number;
 };
 
 export type StatusReport = {
@@ -274,12 +284,7 @@ function describeFolder(row: FolderRow): FolderStatus {
     newest: asIso(row.newest),
     lastWrite: asIso(row.lastWrite),
     converged: ceiling > 0 && row.watermark >= ceiling,
-    // Rows above the watermark mean ranges up there have been fetched; a
-    // watermark that has not followed them means at least one bucket in
-    // between never filled. That is the hourly-re-fetch state, and it does not
-    // resolve itself: something in the gap is not being stored, and the
-    // consumer's "returned no headers" warning names the uids.
-    stalled: row.highestUid > row.watermark && ceiling > 0 && row.watermark < ceiling,
+    highestUid: row.highestUid,
   };
 }
 

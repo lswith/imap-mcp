@@ -152,21 +152,27 @@ describe("the status document", () => {
     const [folder] = (await collectStatus(env)).index.folders;
 
     expect(folder.converged).toBe(true);
-    expect(folder.stalled).toBe(false);
+    expect(folder.highestUid).toBe(9);
   });
 
-  it("calls a folder stalled when rows sit above a watermark that stopped moving", async () => {
-    // The failure that reads as success: every tick queues work, rows exist
-    // far above the watermark, and the watermark never advances because one
-    // bucket in between never fills. Hourly, for ever, at full cost.
+  it("reports the watermark and the highest stored uid without judging between them", async () => {
+    // A watermark far below the rows above it is the shape of a stall — and
+    // ALSO the shape of every healthy tick, because enumeration records the
+    // watermark from what was complete when it walked and the consumers it
+    // queued store the ranges above it afterwards. One snapshot cannot tell
+    // those apart, so this document reports both numbers and claims nothing
+    // about the distance between them (#54). The claim that needs two
+    // observations is made where two observations exist: the `[cron]` warning.
     await seedMessage({ folder: "Archive", uid: 50 });
     await seedMessage({ folder: "Archive", uid: 900 });
     await setFolderProgress("Archive", 1000, 47);
 
     const [folder] = (await collectStatus(env)).index.folders;
 
-    expect(folder.stalled).toBe(true);
+    expect(folder.watermark).toBe(47);
+    expect(folder.highestUid).toBe(900);
     expect(folder.converged).toBe(false);
+    expect(folder).not.toHaveProperty("stalled");
   });
 
   it("reports the schema as applied, with the migration count", async () => {
