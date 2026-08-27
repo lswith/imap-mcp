@@ -147,7 +147,7 @@ export type MessageRecord = MessageIdentity &
 
 /**
  * A named failure rather than a throw, matching `SearchOutcome` in search.ts and
- * `AccessConfigOutcome` in access.ts. The point of the shape is that the failure
+ * `AuthOutcome` in auth.ts. The point of the shape is that the failure
  * cannot be walked past by forgetting a `catch`.
  */
 export type MessageOutcome<T> = { ok: true; message: T } | { ok: false; reason: string };

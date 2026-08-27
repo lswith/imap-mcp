@@ -99,8 +99,8 @@ export type DraftRequest = {
  * What a write did.
  *
  * An outcome rather than a thrown error, matching `SearchOutcome` and
- * `AccessConfigOutcome`: the caller has to look at `ok` to reach the value, so
- * a refusal cannot be walked past by forgetting a `catch`.
+ * `AuthOutcome`: the caller has to look at `ok` to reach the value, so a
+ * refusal cannot be walked past by forgetting a `catch`.
  *
  * `detail` and `reason` are both written into the audit row, so neither may
  * ever carry any part of the app-specific password.

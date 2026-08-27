@@ -2,17 +2,22 @@
  * The configuration a deployer supplies, declared rather than committed.
  *
  * This repository is public, so `wrangler.jsonc` carries no `vars` block: the
- * mailbox host, port, user and folder identify one person's account, the
- * audience tag identifies one Zero Trust application, and the password is a
- * secret. They are documented in .env.example and added at deploy time.
+ * mailbox host, port, user and folder identify one person's account, and the
+ * audience tag identifies one Zero Trust application. They are documented in
+ * .env.example and added at deploy time. The two secrets (IMAP_PASSWORD,
+ * MCP_API_KEY) are NOT declared here: `secrets.required` in wrangler.jsonc
+ * declares them, a deploy fails until they are set, and `wrangler types`
+ * generates both as non-optional — so the code cannot branch on their
+ * absence.
  * `wrangler types` can only generate Env entries for bindings the committed
  * config declares, so the shape is declared here instead — the same trick
  * test/env.d.ts uses for TEST_MIGRATIONS.
  *
  * Every value is optional in the type because the worker genuinely cannot know
- * what was configured. readSyncConfig (src/sync/config.ts) and readAccessConfig
- * (src/mcp/access.ts) are what turn "absent" into a loud, named failure rather
- * than a connection attempt with `undefined` in it or an unauthenticated pass.
+ * what was configured. readSyncConfig (src/sync/config.ts) turns an absent var
+ * into a loud, named failure rather than a connection attempt with `undefined`
+ * in it; readAuthConfig (src/mcp/auth.ts) turns an absent audience into
+ * API-key mode rather than an unauthenticated pass.
  */
 
 interface DeployerEnvVars {
@@ -22,11 +27,6 @@ interface DeployerEnvVars {
   readonly IMAP_PORT?: string;
   /** Mailbox user. For iCloud, LOGIN wants the local part only. */
   readonly IMAP_USER?: string;
-  /**
-   * App-specific password, set with `wrangler secret put` — never a `vars`
-   * entry. It grants full mailbox access including SMTP send.
-   */
-  readonly IMAP_PASSWORD?: string;
   /**
    * The folders this worker indexes, comma-separated. Defaults to Archive: on
    * iCloud the mail is in Archive, not INBOX, so a sync pointed at INBOX proves
@@ -77,9 +77,14 @@ interface DeployerEnvVars {
    * The Access application's Audience (AUD) tag — a hex string, shown on the
    * application's Overview tab.
    *
-   * This is the value that makes the gate application-scoped rather than
-   * tenant-scoped. Without it, being authenticated for any application on the
+   * This is the optional upgrade (#35): absent, the API key is the
+   * credential; set, Access is required and the key is refused. It is also
+   * what makes the gate application-scoped rather than tenant-scoped —
+   * without the comparison, being authenticated for any application on the
    * same Zero Trust tenant would be enough to read the mailbox.
+   *
+   * Set it only after the Access application is created and verified; delete
+   * it to recover from a lockout (the instance falls back to the key).
    */
   readonly ACCESS_AUD?: string;
 }

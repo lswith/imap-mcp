@@ -19,7 +19,7 @@ exports three entry points from `src/index.ts`: `fetch` (the MCP server),
 - `src/sync/` — everything that speaks IMAP: enumeration, the queue consumer,
   normalisation, attachments, and the mailbox side of the write tools. Policy
   refusals live here, with the credential.
-- `src/mcp/` — the MCP server: the Access gate, search, retrieval, the
+- `src/mcp/` — the MCP server: the authentication gate, search, retrieval, the
   untrusted-content envelope, the tool side of the writes, and the audit log.
   It reads D1 and calls the write service; it decides nothing about whether a
   write is allowed.
@@ -78,10 +78,12 @@ tests drive a fake `Mailbox`.
   deployer supplies (`IMAP_HOST`, `ACCESS_AUD`, …) are declared in
   `src/env.d.ts` rather than committed as a `vars` block — see `.env.example`.
 - **`workers_dev` is `true` (#34), and that is deliberate.** The Worker is
-  reachable at its workers.dev hostname by default, so the Access gate
-  (`src/mcp/access.ts`) is the layer that holds the line: an instance with no
-  `ACCESS_AUD` answers 500, never an unauthenticated 200. `preview_urls`
-  stays `false`.
+  reachable at its workers.dev hostname by default, so the authentication gate
+  (`src/mcp/auth.ts`) is the layer that holds the line: every request needs
+  the `MCP_API_KEY` secret as a bearer token, or Cloudflare Access once
+  `ACCESS_AUD` is set (#35). The unconfigured case is unreachable by
+  construction — `secrets.required` in `wrangler.jsonc` fails a deploy until
+  both secrets are set. `preview_urls` stays `false`.
 - **The app-specific password grants full mailbox access, including SMTP
   send.** It must never reach a log line, including error paths, and an auth
   failure must fail loudly rather than retry — a revoked password retried at
@@ -94,11 +96,11 @@ tests drive a fake `Mailbox`.
 Early. The mailbox interface (`src/imap`, #3), the D1 schema (`migrations/`,
 #4), the tracer sync (#5), the queue fan-out (#6), incremental sync (#8),
 attachments (`src/sync/attachments.ts`, #9), the MCP server (`src/mcp`, #7),
-the Access gate (`src/mcp/access.ts`, #10), the retrieval tools
+the authentication gate (`src/mcp/auth.ts`, #10 and #35), the retrieval tools
 (`src/mcp/message.ts` and `src/mcp/thread.ts`, #11), the write tools (#12) and
 the single-Worker merge (#34) are implemented and tested. The rest is tracked
 as issues on this repo: #24 flag reconciliation, #31 `.docx` text extraction,
-and the epic #43 (auth modes #35, deploy button #36, docs #37, releases #38).
+and the epic #43 (deploy button #36, docs #37, releases #38).
 See the roadmap table in README.md, and docs/access.md for the Access setup.
 
 Constraints already built into `src/imap`, because everything downstream of it
@@ -348,11 +350,35 @@ model is decided:
   reflected is the RFC 9728 document, which asserts nothing but the hostname the
   caller itself asked for.
 
-And from the Access gate (`src/mcp/access.ts`, #10), which is the load-bearing
-control in the whole design rather than hygiene on top of it — since #34 made
-the Worker reachable by default, it is the only layer between the mailbox index
-and the internet:
+And from the authentication gate (`src/mcp/auth.ts`, #10 and #35), which is
+the load-bearing control in the whole design rather than hygiene on top of it —
+since #34 made the Worker reachable by default, it is the only layer between
+the mailbox index and the internet:
 
+- **Two modes, and it is precedence, not fallback.** With no `ACCESS_AUD`, the
+  `MCP_API_KEY` secret is the credential, presented as a bearer token and
+  compared in constant time over SHA-256 digests. With the audience set,
+  Access is required and a valid key is *refused* — so a key leaked before the
+  upgrade is not a permanent bypass of the stronger control. The two are never
+  both accepted, and the decision table in #35 is the whole of it.
+- **The unconfigured case is guarded at deploy time, not at runtime.**
+  `secrets.required` in `wrangler.jsonc` makes `wrangler deploy` fail, listing
+  the missing names, and `wrangler types` generates both secrets as
+  non-optional so the code cannot branch on their absence. The runtime branch
+  that answered 500 on absent configuration is gone, with its tests; a secret
+  deleted through the dashboard still refuses (the digest of `undefined`'s
+  string form matches no presentable token) — closed by accident rather than
+  by design, and the docs say so.
+- **Two challenge shapes, deliberately.** The Access-mode 401 carries the
+  SDK-built challenge with a `resource_metadata` pointer, so an OAuth-capable
+  client runs discovery. The API-key-mode 401 is a bare bearer challenge with
+  no pointer — advertising an OAuth flow that does not exist in that mode
+  would send a client into a discovery that cannot succeed.
+- **Upgrade ordering, and recovery.** Create the Access application (Worker
+  destination), verify it, *then* set `ACCESS_AUD` — during the window the
+  Access context is present but unchecked, so the key still carries the caller
+  and there is no gap. Locked out by an audience set too early? Delete the
+  audience; the instance falls straight back to key authentication.
 - **The gate reads `ctx.access`, never a header.** Access Managed OAuth issues
   the *client* an opaque token (`oauth:...`) only Access can verify, exchanges
   it at the edge, and hands the worker the result as `ctx.access`. It also still
@@ -370,7 +396,7 @@ and the internet:
   comes back 401 from the edge instead. That is the cheapest way to tell a
   Worker destination from a hostname one. It also inverts the setup order — you
   cannot attach a Worker that does not exist, so the Worker is deployed
-  (answering 500 without an audience) before the application is created. The
+  (running in API-key mode) before the application is created. The
   one constraint it carries: worker-level Access does not support WebSockets.
   MCP Streamable HTTP is POST + SSE, so that is free today — but a tool that
   reached for WebSockets would have to move back to a hostname destination.
@@ -379,13 +405,6 @@ and the internet:
   account holds many applications and another one's policy may be far more
   generous than this one's. A test proves it: stub the comparison out and a
   caller authenticated for `another-application` walks in.
-- **Absent configuration is a 500, never a pass and never a 401.** A 401 would
-  invite a client into an OAuth flow that cannot succeed; a 403 would claim a
-  correct credential was rejected and send the deployer to edit the wrong thing.
-  What must never happen is the third option. `readAccessConfig` returns an
-  outcome rather than throwing, matching `SearchOutcome` in `src/mcp/search.ts`,
-  so the failure cannot be walked past by forgetting a `catch`. (#35 replaces
-  this posture with a required API key validated at deploy time.)
 - **The refusal is a `401` with a `WWW-Authenticate` challenge, never a
   redirect.** That is what makes an MCP client run the OAuth flow instead of
   rendering a login page it cannot complete, and it is why Managed OAuth has to
@@ -415,10 +434,11 @@ and the internet:
   populates `ctx.access` for this deployment is the one step no test can
   exercise, so the authenticated post-deploy check in docs/access.md is not
   optional.
-- **`wrangler dev` answers 401 to everything until an audience is supplied,
-  and that is correct.** Access is not in front of a local worker, so
-  `ctx.access` is undefined. Most work on the MCP tools happens through the
-  test suite instead, which drives the handler directly.
+- **`wrangler dev` runs in API-key mode.** Access is not in front of a local
+  worker, so `ctx.access` is undefined — with no `ACCESS_AUD` configured
+  locally, the key in `.dev.vars` is the credential and the endpoint works.
+  Most work on the MCP tools still happens through the test suite, which
+  drives the handler directly.
 
 And from the write tools (#12), which are the only way anything in this system
 changes a mailbox:

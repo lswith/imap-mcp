@@ -53,8 +53,12 @@ export default defineConfig({
                 SYNC_ENUMERATE_WINDOW: "100",
                 SYNC_MAX_CHUNKS_PER_RUN: "50",
                 // The Access `var` a deployer adds; src/env.d.ts declares its
-                // shape.
+                // shape. With it set, the workerd suite runs in Access mode by
+                // default; API-key-mode tests spread it away per test.
                 ACCESS_AUD: TEST_AUD,
+                // The required secret a deploy prompts for (#35). Matches
+                // test/mcp/support/access.ts.
+                MCP_API_KEY: "test-api-key-9Yl3u4vZs1QeXKp7RbT2wA==",
               },
             },
           }),

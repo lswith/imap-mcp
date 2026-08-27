@@ -237,19 +237,29 @@ say "Access attaches to the Worker, and you cannot attach one that does not"
 say "exist. So the Worker gets deployed first — with no audience tag yet."
 say ""
 warn "That is safe, and it is worth knowing why rather than trusting it:"
-note "with ACCESS_AUD unset the worker answers 500 to every request, even at"
-note "its workers.dev hostname. The gate fails closed."
+note "with ACCESS_AUD unset the worker requires the MCP_API_KEY secret as a"
+note "bearer token (#35), and a deploy fails until that secret is set. There"
+note "is no unauthenticated state to pass through."
 say ""
 note "wrangler.jsonc commits no database_id, so the first deploy provisions"
 note "the D1 database and writes the id back into your checkout — keep it in"
 note "your fork, and don't push it upstream. Queues needs a Workers Paid plan."
 say ""
-say "Run, in order:"
+say "On a FIRST deploy the two required secrets ride along with the code:"
+say "wrangler refuses to deploy without them, and 'wrangler secret put'"
+say "cannot target a Worker that does not exist yet. So, in order:"
 say ""
-printf '  pnpm run deploy\n'
+printf '  cat > .secrets.env <<DONE        # gitignored\n'
+printf '  IMAP_PASSWORD=<app-specific password>\n'
+printf '  MCP_API_KEY=<output of: openssl rand -base64 32>\n'
+printf '  DONE\n'
+printf '  pnpm exec wrangler deploy --secrets-file .secrets.env\n'
+printf '  rm .secrets.env\n'
 printf '  pnpm run db:migrate:remote\n'
 say ""
-step "The schema apply is a no-op if re-run."
+step "Later deploys are plain 'pnpm run deploy'; rotate a secret with"
+step "'pnpm exec wrangler secret put <NAME>'. The schema apply is a no-op"
+step "if re-run."
 say ""
 confirm "Worker deployed?" || exit 0
 

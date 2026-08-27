@@ -4,10 +4,11 @@
  *
  * Reads come from D1; writes go through the write service (src/sync/handlers.ts),
  * which is where every refusal lives. Since #34 the Worker is reachable at its
- * workers.dev hostname by default, so this gate is what stands between the
- * mailbox index and the internet: every request is refused unless Cloudflare
- * Access authenticated it for this application. See src/mcp/access.ts and
- * docs/access.md.
+ * workers.dev hostname by default, so the authentication gate is what stands
+ * between the mailbox index and the internet: every request is refused unless
+ * it carries the API key, or — once the Access upgrade is configured —
+ * Cloudflare Access authenticated it for this application. See
+ * src/mcp/auth.ts and docs/access.md.
  */
 
 import {
@@ -17,7 +18,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { createWriteService } from "../sync/handlers";
 import type { WriteService } from "../writes";
-import { verifyAccess } from "./access";
+import { verifyAuth } from "./auth";
 import { createServer } from "./server";
 
 /** The one path this worker serves. Everything else is a 404, not a handler. */
@@ -82,22 +83,24 @@ export async function handleRequest(
   const rejected = originValidationResponse(request, localhostAllowedOrigins());
   if (rejected) return rejected;
 
-  // Cloudflare Access, read from the runtime rather than from a header (#10).
+  // Authentication (#35): the API key, or Cloudflare Access once the audience
+  // is configured — precedence, not fallback (src/mcp/auth.ts).
   //
   // Third of three, and one step of that order is load-bearing rather than
   // tidy: Origin has to come first, because a DNS-rebound request carries the
   // victim's Access *cookie*, so Access authenticates it and the check below
-  // **passes**. Access authenticating a request does not make it one the user
-  // meant to send. The Origin check is the only thing that stops it, so it
-  // must not be reachable past by being genuinely signed in.
+  // **passes** — and in API-key mode a rebound page scripted to send the key
+  // is the same shape. Authentication succeeding does not make a request one
+  // the user meant to send. The Origin check is the only thing that stops it,
+  // so it must not be reachable past by being genuinely signed in.
   //
   // The 404 above comes first for a duller reason: an unauthenticated probe
   // of some other path is not an authentication failure, and answering it
-  // with a challenge would advertise that this hostname is gated by Access.
-  // The cost is that a cross-origin probe gets 403 rather than 401, which
-  // tells an attacker nothing they did not already supply.
-  const access = verifyAccess(request, env, ctx.access);
-  if (!access.ok) return access.response;
+  // with a challenge would advertise that this hostname is gated. The cost is
+  // that a cross-origin probe gets 403 rather than 401, which tells an
+  // attacker nothing they did not already supply.
+  const auth = await verifyAuth(request, env, ctx.access);
+  if (!auth.ok) return auth.response;
 
   // Built per request, deliberately. The factory `createMcpHandler` calls is
   // handed no `env`, so a handler held at module scope would close over
@@ -107,7 +110,7 @@ export async function handleRequest(
   // The Access context rides through to the write tools (#12), which need an
   // actor for the audit row. Handed over whole rather than resolved here:
   // `getIdentity()` is a call, and a search has no business paying for one.
-  return createMcpHandler(() => createServer(env, writer, access.access)).fetch(request);
+  return createMcpHandler(() => createServer(env, writer, auth.access)).fetch(request);
 }
 
 /**
