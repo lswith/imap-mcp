@@ -161,6 +161,8 @@ const CELL_BREAK = "\u0002";
 /** Inline CSS that hides an element without a `hidden` attribute. */
 const HIDING_CSS = /display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0/i;
 
+const SHORT_PLAIN_FALLBACK_CHARS = 512;
+
 /**
  * Reduces an HTML body to plain text.
  *
@@ -336,15 +338,19 @@ export function tidyLines(text: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * The body to index: the text/plain part when there is one, the HTML reduced
- * to text otherwise.
+ * The body to index: the text/plain part when it carries the body, the HTML
+ * reduced to text otherwise.
  *
  * Plain text keeps its own whitespace — the indentation of a quoted diff or a
  * signature is content — so only the HTML path collapses runs of spaces.
  */
 export async function normaliseBody(message: MailboxMessage): Promise<string | null> {
   const plain = message.text?.trim() ? tidyLines(message.text) : "";
-  const text = plain || (message.html ? await htmlToText(message.html) : "");
+  let text = plain || (message.html ? await htmlToText(message.html) : "");
+  if (plain && message.html && plain.length <= SHORT_PLAIN_FALLBACK_CHARS) {
+    const html = await htmlToText(message.html);
+    if (html.length > plain.length) text = html;
+  }
   if (!text) return null;
 
   const stripped = stripInvisible(text);
