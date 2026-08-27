@@ -39,8 +39,8 @@
  */
 
 import { MAX_UID, type Mailbox, type SearchCriteria } from "../imap";
-import { readSyncConfig, type SyncConfig } from "./config";
-import { createLogger, describeError, type Logger } from "./log";
+import { createLogger, describeError, type Logger } from "../log";
+import { describeSyncConfig, readSyncConfig, type SyncConfig } from "./config";
 import { bucketOf, bucketRange, type ChunkProducer, type SyncChunk } from "./queue";
 import { type SyncDeps, withMailbox } from "./session";
 import { indexedBuckets, recordSyncWatermark, resetSyncWatermark, upsertFolder } from "./store";
@@ -82,6 +82,18 @@ export async function runEnumerate(env: Env, deps: SyncDeps = {}): Promise<Enume
   const log = deps.log ?? createLogger(env);
   const config = readSyncConfig(env);
   const queue = env.SYNC_QUEUE as ChunkProducer;
+
+  // Said before any of it happens, deliberately.
+  //
+  // The summary at the end covers a run that finished, and the handler covers
+  // one that threw. What neither covers is a run that was killed — a wall-clock
+  // or CPU limit, an isolate that went away — and that is exactly the shape a
+  // deployed instance fails in: hourly invocations, none of them saying
+  // anything. A line here means the timeline always holds a beginning, so a
+  // missing end is a fact rather than an absence of facts. It also prints the
+  // configuration in effect, which is the first thing anyone asks when the
+  // Worker is not indexing what they think it should be.
+  log.info(`starting: ${describeSyncConfig(config)}`);
 
   // Evenly divided rather than first-come: without this a folder mid-backfill
   // would spend the whole ceiling every run and the others would never start.
@@ -153,6 +165,11 @@ async function enumerateFolder(
     log.warn(`${name}: no HIGHESTMODSEQ — CONDSTORE is not in effect for this folder`);
   }
 
+  // Whether a previous run got this far. It is what tells a folder that has
+  // never been enumerated (watermark legitimately still 0) apart from one that
+  // is stuck (watermark 0 and not moving) — see the warning at the end.
+  const seenBefore = folder.previousUidValidity !== null;
+
   let resumeFrom = folder.watermark;
 
   if (folder.previousUidValidity !== null && folder.previousUidValidity !== uidValidity) {
@@ -177,6 +194,11 @@ async function enumerateFolder(
     enqueued: 0,
     watermark: resumeFrom,
   };
+
+  log.debug(
+    `${name}: ${state.exists} messages, uidnext ${state.uidNext ?? "?"}, ` +
+      `uidvalidity ${uidValidity}, resuming above ${resumeFrom}`,
+  );
 
   if (state.exists === 0) {
     await recordSyncWatermark(env.DB, folder.id, 0, Date.now());
@@ -214,6 +236,7 @@ async function enumerateFolder(
     const to = Math.min(from + config.enumerateWindow - 1, MAX_UID);
     const uids = (await mailbox.search(window(from, to, config))).sort((a, b) => a - b);
     enumeration.scanned += uids.length;
+    log.debug(`${name}: searched ${from}:${to}, ${uids.length} uids`);
 
     let budgetSpent = false;
     for (const [bucket, members] of byBucket(uids, config.chunkUids)) {
@@ -252,6 +275,29 @@ async function enumerateFolder(
 
   await flush(queue, pending);
   await recordSyncWatermark(env.DB, folder.id, enumeration.watermark, Date.now());
+
+  // Two things worth saying about a run that queued work, because they are the
+  // two ways an hourly tick stops being progress:
+  if (enumeration.enqueued >= budget) {
+    // Expected during a backfill, and the number a deployer uses to answer
+    // "how long will this take?" — so it is said plainly rather than left to
+    // be inferred from a range count that happens to equal the ceiling.
+    log.info(
+      `${name}: spent this run's budget of ${budget} ranges at uid ${enumeration.watermark}; ` +
+        `the rest resumes next tick`,
+    );
+  } else if (enumeration.enqueued > 0 && enumeration.watermark === resumeFrom && seenBefore) {
+    // Not expected, ever, and invisible without this line: the folder queued
+    // work and the watermark did not move, which means the same ranges will be
+    // queued again next tick, and the tick after that. Something below the
+    // first hole is not being stored — the consumer's "returned no headers"
+    // warning names the uids when that is why.
+    log.warn(
+      `${name}: watermark still at ${resumeFrom} after queueing ${enumeration.enqueued} ranges — ` +
+        `a bucket above it never completes, so this folder is re-queueing the same work every ` +
+        `tick; look for uids that returned no headers`,
+    );
+  }
   return enumeration;
 }
 

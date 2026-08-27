@@ -24,6 +24,7 @@
  */
 
 import type { Mailbox, MessageFlags } from "../imap";
+import type { Logger } from "../log";
 import {
   ALLOWED_FLAGS,
   type DraftRequest,
@@ -35,7 +36,6 @@ import {
 import type { SyncConfig } from "./config";
 import { buildDraft } from "./draft";
 import { resolveDestination, resolveDrafts } from "./folders";
-import type { Logger } from "./log";
 import { deleteMessage } from "./store";
 
 const ALLOWED = new Set<string>(ALLOWED_FLAGS);

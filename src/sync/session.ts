@@ -9,8 +9,8 @@
  */
 
 import { connectMailbox, type Mailbox, type MailboxConfig } from "../imap";
+import { describeError, type Logger, since } from "../log";
 import type { SyncConfig } from "./config";
-import { describeError, type Logger } from "./log";
 
 export type SyncDeps = {
   connect?: (config: SyncConfig) => Promise<Mailbox>;
@@ -56,7 +56,13 @@ export async function withMailbox<T>(
   log: Logger,
   body: (mailbox: Mailbox) => Promise<T>,
 ): Promise<T> {
+  // Timed, because the two ways this hangs look identical from outside: a
+  // mailbox that is refusing connections and one that is merely slow. A run
+  // killed at the wall-clock limit leaves this line as its last word, which
+  // says which of the two it was.
+  const startedAt = Date.now();
   const mailbox = await (deps.connect ?? defaultConnect)(config);
+  log.debug(`connected to ${config.host}:${config.port} in ${since(startedAt)}ms`);
   try {
     return await body(mailbox);
   } finally {

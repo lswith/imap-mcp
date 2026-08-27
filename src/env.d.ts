@@ -1,23 +1,36 @@
 /**
  * The configuration a deployer supplies, declared rather than committed.
  *
- * This repository is public, so `wrangler.jsonc` carries no `vars` block: the
- * mailbox host, port, user and folder identify one person's account, and the
- * audience tag identifies one Zero Trust application. They are documented in
- * .env.example and added at deploy time. The two secrets (IMAP_PASSWORD,
- * MCP_API_KEY) are NOT declared here: `secrets.required` in wrangler.jsonc
- * declares them, a deploy fails until they are set, and `wrangler types`
- * generates both as non-optional — so the code cannot branch on their
- * absence.
- * `wrangler types` can only generate Env entries for bindings the committed
- * config declares, so the shape is declared here instead — the same trick
- * test/env.d.ts uses for TEST_MIGRATIONS.
+ * The split between this file and the `vars` block in wrangler.jsonc is one
+ * rule: a value that identifies nobody is committed there, a value that
+ * identifies someone is only declared here. So the sizing knobs and LOG_LEVEL
+ * ship with committed defaults, while IMAP_HOST, IMAP_USER, SYNC_SINCE, the
+ * draft settings and the Access audience — one person's mailbox, one Zero
+ * Trust application — are added by the deployer in their own fork or in the
+ * dashboard, and this public repository never learns them. .env.example
+ * documents the values; `wrangler types` can only generate Env entries for
+ * what the committed config declares, so the rest of the shape is declared
+ * here — the same trick test/env.d.ts uses for TEST_MIGRATIONS.
+ *
+ * The committed ones are declared here too, deliberately duplicating what
+ * `wrangler types` generates from the config: generation types them as the
+ * literal value in the file ("100"), which is true of a default deploy and
+ * false of any instance that changed one. The optional `string` below is the
+ * honest type, and it keeps the readers written for the case that actually
+ * needs handling.
+ *
+ * The two secrets (IMAP_PASSWORD, MCP_API_KEY) are NOT declared here:
+ * `secrets.required` in wrangler.jsonc declares them, a deploy fails until
+ * they are set, and `wrangler types` generates both as non-optional — so the
+ * code cannot branch on their absence.
  *
  * Every value is optional in the type because the worker genuinely cannot know
  * what was configured. readSyncConfig (src/sync/config.ts) turns an absent var
  * into a loud, named failure rather than a connection attempt with `undefined`
  * in it; readAuthConfig (src/mcp/auth.ts) turns an absent audience into
- * API-key mode rather than an unauthenticated pass.
+ * API-key mode rather than an unauthenticated pass; readLogLevel (src/log.ts)
+ * turns an unusable one into `info` and a warning, because logging is how the
+ * other two report themselves.
  */
 
 interface DeployerEnvVars {
@@ -61,6 +74,17 @@ interface DeployerEnvVars {
   readonly SYNC_MAX_FETCH_BYTES?: string;
   /** ISO date. When set, only mail received on or after it is indexed. */
   readonly SYNC_SINCE?: string;
+  /**
+   * How much this Worker says about what it is doing: `debug`, `info`
+   * (the default), `warn`, `error` or `silent`.
+   *
+   * Unlike every other var here it has a committed default in the
+   * `vars` block of wrangler.jsonc, because it identifies nobody -- and
+   * because being able to raise it in the dashboard, against an instance that
+   * is already misbehaving, is the whole point of it being configuration.
+   * An unrecognised value falls back to `info` and warns; see src/log.ts.
+   */
+  readonly LOG_LEVEL?: string;
   /**
    * The address create_draft writes a draft From (#12). Defaults to IMAP_USER
    * when that is a full address, and is otherwise omitted — iCloud's LOGIN

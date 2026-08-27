@@ -38,6 +38,67 @@
   //
   // Generate an API key with:  openssl rand -base64 32
   "secrets": { "required": ["IMAP_PASSWORD", "MCP_API_KEY"] },
+  // The knobs, at their defaults, so a deployed instance can be asked what it
+  // is running rather than assumed to be running the code's fallbacks.
+  //
+  // What is here and what is not is one rule: a value that identifies nobody
+  // is committed, a value that identifies someone is not. So the sizing
+  // throttles and the log level live here, and IMAP_HOST, IMAP_USER,
+  // SYNC_SINCE, DRAFT_FROM, DRAFTS_FOLDER and ACCESS_AUD do not -- they name
+  // one person's mailbox or one Zero Trust application, and this file is
+  // committed to a public repository. Add those in YOUR FORK (see
+  // .env.example) or in the dashboard; `keep_vars` below is what makes the
+  // second of those survive a deploy.
+  //
+  // Every value here restates the default in src/sync/config.ts, so this block
+  // changes no behaviour -- what it changes is that `wrangler deploy` prints
+  // them, the dashboard shows them, and GET /status reports them. A knob whose
+  // value nobody can see is a knob nobody can debug.
+  //
+  // CHANGE THEM HERE, NOT IN THE DASHBOARD. Deploying sets every var in this
+  // block, so a dashboard edit to one of THESE names is overwritten on the
+  // next deploy. (`keep_vars` protects the names that are absent here, which
+  // is the opposite case and the one that matters: your mailbox settings.)
+  "vars": {
+    // debug | info | warn | error | silent. See src/log.ts for what each
+    // level says. `debug` is per-window and per-message, so it is loud in
+    // proportion to the mailbox -- raise it to diagnose, then put it back.
+    "LOG_LEVEL": "info",
+    // 993, implicit TLS. The port is configuration rather than a constant
+    // because this server is generic and only happens to run against iCloud.
+    "IMAP_PORT": "993",
+    // On iCloud the mail is in Archive, not INBOX. Comma-separated, because a
+    // folder name can contain the hierarchy delimiter: "Archive,Lists/rust-dev".
+    "SYNC_FOLDERS": "Archive",
+    // Uids per queue message, and the bucket size gap detection counts in.
+    // Changing it moves every bucket boundary and re-enqueues the folder once.
+    "SYNC_CHUNK_UIDS": "100",
+    // Messages per FETCH -- the count half of the peak-memory bound.
+    "SYNC_CHUNK_SIZE": "10",
+    // Uids per enumeration SEARCH.
+    "SYNC_ENUMERATE_WINDOW": "5000",
+    // Ranges one cron tick may queue, across all folders: the backfill
+    // throttle, ~5000 messages an hour at these numbers.
+    "SYNC_MAX_CHUNKS_PER_RUN": "50",
+    // 8 MiB: the byte half of the peak-memory bound, and the ceiling on one
+    // message. Above it a message is recorded from its headers as `oversize`.
+    "SYNC_MAX_FETCH_BYTES": "8388608"
+  },
+  // Vars this file does not name are LEFT ALONE by a deploy.
+  //
+  // The default is the opposite -- `wrangler deploy` deletes every var it does
+  // not carry -- and with the mailbox settings deliberately uncommittable
+  // (above), that default is a trap: set IMAP_HOST in the dashboard, push
+  // anything, and continuous deployment silently unconfigures the mailbox.
+  // The instance keeps answering; the cron just stops finding a host, hourly,
+  // for as long as nobody reads the logs. That is the failure this whole
+  // change exists to make visible, so it is also worth simply preventing.
+  //
+  // The cost is drift: a var deleted from this block stays on the deployed
+  // Worker until it is deleted in the dashboard too. GET /status reports the
+  // values actually in effect, which is where a disagreement shows up.
+  // Secrets are never touched by a deploy either way.
+  "keep_vars": true,
   // The index. One database, one Worker: the sync half writes it, the MCP half
   // reads it.
   //
@@ -111,19 +172,15 @@
   //   routes      -- your own zone, if you prefer a custom hostname over
   //                  workers.dev; see .env.example
   //
-  // Nor is a `vars` block, which is why src/env.d.ts declares the shape
-  // instead: the mailbox host and user identify one person's account, and this
-  // file is committed to a public repository. Add them at deploy time (see
-  // .env.example):
-  //   IMAP_HOST, IMAP_PORT, IMAP_USER  -- the mailbox
-  //   SYNC_FOLDERS                     -- folders to sync; defaults to Archive
-  //   SYNC_CHUNK_UIDS, SYNC_CHUNK_SIZE -- uids per queue message, messages per fetch
-  //   SYNC_ENUMERATE_WINDOW            -- uids per enumeration SEARCH
-  //   SYNC_MAX_CHUNKS_PER_RUN          -- ranges one cron tick may queue
-  //   SYNC_MAX_FETCH_BYTES             -- byte budget for one FETCH; the ceiling on one message
-  //   SYNC_SINCE                       -- optional ISO date floor
-  //   ACCESS_AUD                       -- the optional Access upgrade (#35): set it
-  //                                       and Access is required, the API key refused
+  // The `vars` block above carries the knobs. What it deliberately leaves out
+  // is everything that identifies you, which src/env.d.ts declares the shape
+  // of instead. Add these in your fork or the dashboard (see .env.example):
+  //   IMAP_HOST, IMAP_USER  -- the mailbox. Without them the cron fails,
+  //                            hourly and by name, in the logs
+  //   SYNC_SINCE            -- optional ISO date floor
+  //   DRAFT_FROM, DRAFTS_FOLDER -- only if create_draft needs them (#12)
+  //   ACCESS_AUD            -- the optional Access upgrade (#35): set it
+  //                            and Access is required, the API key refused
   //
   // The two required secrets are declared in `secrets` above and set with
   // `pnpm exec wrangler secret put` (or --secrets-file on a first deploy):

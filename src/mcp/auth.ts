@@ -81,8 +81,25 @@ export function readAuthConfig(env: Env): AuthMode {
  * nobody.
  */
 export type AuthOutcome =
-  | { readonly ok: true; readonly access?: CloudflareAccessContext }
-  | { readonly ok: false; readonly response: Response };
+  | {
+      readonly ok: true;
+      readonly access?: CloudflareAccessContext;
+      readonly mode: AuthMode["mode"];
+    }
+  | {
+      readonly ok: false;
+      readonly response: Response;
+      readonly mode: AuthMode["mode"];
+      /**
+       * Which of the refusals this was, for the log line — never for the
+       * caller. "No Access context at all" and "Access, but for another
+       * application" are the same 401 to a client and completely different
+       * problems to whoever configured the audience, and a deployer currently
+       * has no way to tell them apart. It says nothing the caller supplied,
+       * so it quotes no token, no header and no mailbox text.
+       */
+      readonly reason: string;
+    };
 
 export async function verifyAuth(
   request: Request,
@@ -92,12 +109,14 @@ export async function verifyAuth(
   const config = readAuthConfig(env);
 
   if (config.mode === "api-key") {
-    if (await presentsApiKey(request, env)) return { ok: true };
+    if (await presentsApiKey(request, env)) return { ok: true, mode: "api-key" };
     // A bare bearer challenge, deliberately without a resource_metadata
     // pointer: advertising an OAuth flow that does not exist in this mode
     // would send a client into a discovery that cannot succeed.
     return {
       ok: false,
+      mode: "api-key",
+      reason: "no bearer token, or one that is not the API key",
       response: bearerAuthChallengeResponse(
         new OAuthError(OAuthErrorCode.InvalidToken, "Invalid or missing API key"),
       ),
@@ -120,6 +139,10 @@ export async function verifyAuth(
   if (!access) {
     return {
       ok: false,
+      mode: "access",
+      reason:
+        "ACCESS_AUD is set but the runtime supplied no Access context — either nothing is in " +
+        "front of this Worker, or the Access application does not cover it",
       response: challenge(
         "Cloudflare Access did not authenticate this request",
         resourceMetadataUrl,
@@ -135,11 +158,13 @@ export async function verifyAuth(
   if (access.aud !== config.aud) {
     return {
       ok: false,
+      mode: "access",
+      reason: "Access authenticated the caller for a different application than ACCESS_AUD names",
       response: challenge("Not authenticated for this application", resourceMetadataUrl),
     };
   }
 
-  return { ok: true, access };
+  return { ok: true, access, mode: "access" };
 }
 
 /**

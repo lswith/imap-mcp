@@ -21,7 +21,7 @@
  */
 
 import type { MailboxAttachment, MailboxMessage } from "../imap";
-import type { Logger } from "./log";
+import type { Logger } from "../log";
 import { stripInvisible, TRUNCATION_MARKER, tidyLines } from "./normalise";
 
 /**

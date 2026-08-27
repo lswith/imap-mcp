@@ -19,6 +19,8 @@ is [CONTRIBUTING.md](./CONTRIBUTING.md).
 - `src/sync/` — everything that speaks IMAP. Write-policy refusals live here.
 - `src/mcp/` — auth gate, tools, untrusted-content envelope, audit log.
 - `src/writes.ts` — the `WriteService` contract between the two halves.
+- `src/log.ts` — the only file in `src/` that may call `console.*`.
+- `src/status.ts` — the `GET /status` diagnostics document.
 - `migrations/` — the D1 schema.
 
 Tests: `test/sync`, `test/mcp`, `test/imap/unit` and `test/repo` run inside
@@ -48,9 +50,20 @@ one is a design change, not a refactor — take it to an issue first.
 **Credential and logging**
 
 - The app-specific password grants full mailbox access including SMTP send. It
-  must never reach a log line. Nothing in `src/sync` calls `console.*`
-  directly — every line goes through `createLogger(env)` (`src/sync/log.ts`),
-  which scrubs the password in every form it comes back off the wire.
+  must never reach a log line. Nothing in `src/` calls `console.*` directly —
+  every line goes through `createLogger(env)` (`src/log.ts`), which scrubs the
+  password in every form it comes back off the wire. `noConsole` in
+  `biome.json` is an error everywhere in `src/` except that one file.
+- A log line says how many and how long, never what: no bodies, no subjects,
+  no addresses, no search queries, and not the mailbox user either. `/status`
+  names the user, to one authenticated caller who asked; a log store is a
+  different thing.
+- `LOG_LEVEL` selects the floor (`debug` … `silent`, default `info`). Unlike
+  every other reader, an unusable value falls back and warns rather than
+  throwing — logging is how the other failures report themselves.
+- Both entry points log a line BEFORE the work as well as after it. A run
+  killed at a CPU or wall-clock limit says nothing on its way out, and a
+  beginning with no end is a fact where two silences are not.
 - An auth failure against the mailbox fails loudly and is never retried —
   not by the cron, not by a queue consumer (the batch is acked), not by a
   write tool. A revoked password retried at queue speed locks an Apple ID.
@@ -64,6 +77,10 @@ one is a design change, not a refactor — take it to an issue first.
 
 - Every message write is an upsert on `(folder_id, uidvalidity, uid)`; queue
   delivery is at-least-once, so nothing may assume it runs once.
+- A uid enumeration saw and the consumer could not store is counted
+  (`ChunkOutcome.missing`) and named in a warning. It is the one sync failure
+  with no error behind it: nothing throws, the range acks, and the short bucket
+  pins the watermark and re-queues the range hourly for ever.
 - Consumers never write the watermark — enumeration owns it. Ranges complete
   out of order, and a consumer-side `max()` would claim contiguity that does
   not exist.
@@ -148,9 +165,11 @@ one is a design change, not a refactor — take it to an issue first.
 - The gate reads `ctx.access`, never a header, and the `aud` comparison is the
   whole security decision in Access mode — a test stubs it out to prove a
   caller for another application walks in; that test must survive.
-- Request order in the fetch path: discovery → 404 → Origin → auth. Origin
-  must run before auth in both modes — an authenticated (or key-bearing)
-  DNS-rebound browser request is the case it exists for.
+- Request order in the fetch path: discovery → 404 → Origin → auth → route.
+  Origin must run before auth in both modes — an authenticated (or
+  key-bearing) DNS-rebound browser request is the case it exists for. Two
+  paths are served, `/mcp` and `/status`, and both are behind the whole of
+  that order; everything else is still a 404 ahead of it.
 - The RFC 9728 discovery document is served unauthenticated, ahead of
   everything. Access-mode 401s carry the OAuth challenge with
   `resource_metadata`; API-key-mode 401s carry a bare bearer challenge with no
@@ -193,6 +212,11 @@ one is a design change, not a refactor — take it to an issue first.
 - Timestamps are INTEGER epoch milliseconds everywhere.
 - There is no `wrangler d1 export` (FTS5); re-running the backfill is the
   recovery path.
+- The `vars` block carries only values that identify nobody (the sizing knobs,
+  `LOG_LEVEL`), at the same defaults `src/sync/config.ts` falls back to.
+  `keep_vars` is true so a deploy leaves the uncommittable ones — `IMAP_HOST`,
+  `IMAP_USER`, `ACCESS_AUD` — alone wherever the deployer put them; without it
+  a push silently unconfigures the mailbox.
 - No account-specific value is committed: no account id, database id, audience
   tag, or mailbox address. Wrangler's `database_id` write-back is correct in a
   fork and must never be pushed upstream.

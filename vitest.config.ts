@@ -66,6 +66,9 @@ export default defineConfig({
         test: {
           name: "workerd",
           include: [
+            // The logger and the status document are the Worker's, not one
+            // half's, so their tests sit beside them at the top of test/.
+            "test/*.test.ts",
             "test/sync/**/*.test.ts",
             "test/mcp/**/*.test.ts",
             "test/imap/unit/**/*.test.ts",

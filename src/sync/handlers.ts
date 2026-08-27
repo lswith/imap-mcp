@@ -19,11 +19,11 @@
  */
 
 import { ImapAuthError, type Mailbox } from "../imap";
+import { createLogger, createScrubber, describeError, type Logger } from "../log";
 import type { DraftRequest, FlagRequest, MoveRequest, WriteOutcome, WriteService } from "../writes";
 import { readSyncConfig, type SyncConfig, SyncConfigError } from "./config";
 import { type ChunkOutcome, consumeChunk } from "./consume";
 import { runEnumerate, summariseEnumeration } from "./enumerate";
-import { createLogger, createScrubber, describeError, type Logger } from "./log";
 import { DEAD_LETTER_QUEUE, describeChunk, parseChunk, type SyncChunk } from "./queue";
 import type { SyncDeps } from "./session";
 import { withMailbox } from "./session";
@@ -42,7 +42,9 @@ export async function handleScheduled(
   env: Env,
   deps: SyncDeps = {},
 ): Promise<void> {
-  const log = deps.log ?? createLogger(env);
+  // Tagged, so "is the cron running at all?" is a filter in the dashboard
+  // rather than a question about which lines came from which entry point.
+  const log = deps.log ?? createLogger(env, "cron");
 
   try {
     log.info(summariseEnumeration(await runEnumerate(env, { ...deps, log })));
@@ -76,7 +78,7 @@ export async function handleQueue(
   ctx: ExecutionContext,
   deps: SyncDeps = {},
 ): Promise<void> {
-  const log = deps.log ?? createLogger(env);
+  const log = deps.log ?? createLogger(env, batch.queue === DEAD_LETTER_QUEUE ? "dlq" : "queue");
 
   if (batch.queue === DEAD_LETTER_QUEUE) {
     reportDeadLetters(batch, log);
@@ -99,6 +101,7 @@ export async function handleQueue(
   if (work.length === 0) return;
 
   const config = readSyncConfig(env);
+  log.debug(`taking ${work.length} range(s) over one connection`);
   try {
     await withMailbox(config, deps, log, async (mailbox) => {
       for (const { message, chunk } of work) {
@@ -138,6 +141,10 @@ function summarise(outcome: ChunkOutcome): string {
   const parts = [`${outcome.stored} messages`];
   if (outcome.attachments > 0) parts.push(`${outcome.attachments} attachments`);
   if (outcome.oversize > 0) parts.push(`${outcome.oversize} too large to fetch`);
+  // On the success line as well as in its own warning: the warning says which
+  // uids and why it matters, this says it happened at all, and the second is
+  // what makes a run of these visible when nobody was reading warnings.
+  if (outcome.missing > 0) parts.push(`${outcome.missing} uids unanswered`);
   return parts.join(", ");
 }
 
@@ -183,7 +190,7 @@ async function performWrite(
   tool: string,
   body: (context: { mailbox: Mailbox; config: SyncConfig; log: Logger }) => Promise<WriteOutcome>,
 ): Promise<WriteOutcome> {
-  const log = deps.log ?? createLogger(env);
+  const log = deps.log ?? createLogger(env, "write");
   const scrub = createScrubber(env);
 
   let config: SyncConfig;

@@ -1,9 +1,9 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ImapProtocolError } from "../../src/imap";
+import { createLogger } from "../../src/log";
 import { readSyncConfig } from "../../src/sync/config";
 import { consumeChunk } from "../../src/sync/consume";
-import { createLogger } from "../../src/sync/log";
 import type { SyncChunk } from "../../src/sync/queue";
 import {
   attachmentOf,
@@ -339,11 +339,36 @@ describe("consuming one uid range", () => {
     // client had expunged them. Not an error — the range simply has no work.
     const id = await seedFolder();
     const mailbox = new FakeMailbox({ messages: [] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await run(mailbox, chunk({ folderId: id, uids: [1, 2] }));
 
-    expect(result).toEqual({ stored: 0, attachments: 0, oversize: 0, stale: false });
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(result).toEqual({ stored: 0, attachments: 0, oversize: 0, missing: 2, stale: false });
     expect(await count("messages")).toBe(0);
+    // Counted and named, because this is the one way a bucket stays short
+    // without anything failing: nothing throws, the range acks, and the
+    // watermark behind it never moves again.
+    expect(warnings).toContain("2 of 2 uids");
+    expect(warnings).toContain("1:2");
+  });
+
+  it("names only the first uids when a whole range goes unanswered", async () => {
+    // A range is 100 uids by default and every one of them can be missing.
+    // The runs identify the hole; the count says the list was cut.
+    const id = await seedFolder();
+    const mailbox = new FakeMailbox({ messages: [] });
+    const uids = Array.from({ length: 40 }, (_, index) => index + 1);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await run(mailbox, chunk({ folderId: id, from: 1, to: 100, uids }));
+
+    const warnings = warn.mock.calls.map(String).join("\n");
+    warn.mockRestore();
+    expect(result.missing).toBe(40);
+    expect(warnings).toContain("40 of 40 uids");
+    expect(warnings).toContain("1:20, ...");
   });
 
   it("lets a fetch failure out, rather than acking work it did not do", async () => {

@@ -16,6 +16,7 @@
 
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { createLogger, type Logger, since } from "../log";
 import { ALLOWED_FLAGS, type WriteOutcome, type WriteService } from "../writes";
 import { getMessage, MAX_BODY_CHARS } from "./message";
 import { DEFAULT_LIMIT, MAX_LIMIT, searchMessages } from "./search";
@@ -206,8 +207,22 @@ export function createServer(
   env: Env,
   writer: WriteService,
   access?: CloudflareAccessContext,
+  log: Logger = createLogger(env, "mcp"),
 ): McpServer {
   const server = new McpServer({ name: NAME, version: VERSION });
+
+  /**
+   * What a tool call did, in counts and milliseconds.
+   *
+   * Never in words: a query is text the model wrote at a user's prompting, and
+   * a result is text an attacker wrote. Neither belongs in a log store that is
+   * kept for a week and read by whoever has dashboard access — the id of a
+   * message is enough to find it again, and the size of an answer is enough to
+   * know whether the tool worked. This is the same line the audit log draws
+   * for writes (#12), applied to reads.
+   */
+  const report = (name: string, startedAt: number, outcome: string) =>
+    log.info(`${name}: ${outcome} in ${since(startedAt)}ms`);
 
   server.registerTool(
     "search_messages",
@@ -218,10 +233,21 @@ export function createServer(
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (input) => {
+      const startedAt = Date.now();
       const outcome = await searchMessages(env.DB, input);
+      // The query's LENGTH, never the query: how a caller phrased a search is
+      // the user's business, and a filter count says everything a stuck search
+      // needs it to.
+      const shape = `${input.query.length}-char query, ${countFilters(input)} filters`;
       if (!outcome.ok) {
+        report("search_messages", startedAt, `refused (${shape})`);
         return { isError: true, content: [{ type: "text", text: outcome.reason }] };
       }
+      report(
+        "search_messages",
+        startedAt,
+        `${outcome.hits.length} hits${outcome.more ? "+" : ""} (${shape})`,
+      );
       return { content: [{ type: "text", text: renderResults(outcome.hits, outcome.more) }] };
     },
   );
@@ -235,10 +261,13 @@ export function createServer(
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (input) => {
+      const startedAt = Date.now();
       const outcome = await getMessage(env.DB, input);
       if (!outcome.ok) {
+        report("get_message", startedAt, `id ${input.id} refused`);
         return { isError: true, content: [{ type: "text", text: outcome.reason }] };
       }
+      report("get_message", startedAt, `id ${input.id}`);
       return { content: [{ type: "text", text: renderMessage(outcome.message) }] };
     },
   );
@@ -252,10 +281,13 @@ export function createServer(
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (input) => {
+      const startedAt = Date.now();
       const outcome = await getThread(env.DB, input);
       if (!outcome.ok) {
+        report("get_thread", startedAt, `id ${input.id} refused`);
         return { isError: true, content: [{ type: "text", text: outcome.reason }] };
       }
+      report("get_thread", startedAt, `id ${input.id}, ${outcome.messages.length} messages`);
       return { content: [{ type: "text", text: renderThread(outcome) }] };
     },
   );
@@ -276,6 +308,22 @@ export function createServer(
     content: [{ type: "text" as const, text: renderWrite(outcome) }],
   });
 
+  /**
+   * A write, timed and reported.
+   *
+   * The write itself is already recorded in write_log with its caller and its
+   * arguments, which is the account that matters; this is the timeline entry
+   * beside the request that caused it, so a write that hung is attributable to
+   * the mailbox rather than to the tool layer. Only whether it succeeded —
+   * the refusal's text is the mailbox layer's, and it can quote a folder name.
+   */
+  const write = async (name: string, run: () => Promise<WriteOutcome>) => {
+    const startedAt = Date.now();
+    const outcome = await run();
+    report(name, startedAt, outcome.ok ? "ok" : "refused");
+    return answer(outcome);
+  };
+
   server.registerTool(
     "flag_message",
     {
@@ -284,7 +332,7 @@ export function createServer(
       inputSchema: FLAG_INPUT,
       annotations: writeAnnotations,
     },
-    async (input) => answer(await flagMessage(env, writer, access, input)),
+    async (input) => write("flag_message", () => flagMessage(env, writer, access, input)),
   );
 
   server.registerTool(
@@ -295,7 +343,7 @@ export function createServer(
       inputSchema: MOVE_INPUT,
       annotations: writeAnnotations,
     },
-    async (input) => answer(await moveMessage(env, writer, access, input)),
+    async (input) => write("move_message", () => moveMessage(env, writer, access, input)),
   );
 
   server.registerTool(
@@ -306,8 +354,13 @@ export function createServer(
       inputSchema: DRAFT_INPUT,
       annotations: writeAnnotations,
     },
-    async (input) => answer(await createDraft(env, writer, access, input)),
+    async (input) => write("create_draft", () => createDraft(env, writer, access, input)),
   );
 
   return server;
+}
+
+/** How many of the optional narrowing arguments a search actually used. */
+function countFilters(input: { folder?: string; from?: string; since?: string; until?: string }) {
+  return [input.folder, input.from, input.since, input.until].filter(Boolean).length;
 }

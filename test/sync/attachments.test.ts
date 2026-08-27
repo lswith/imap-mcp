@@ -1,12 +1,12 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createLogger } from "../../src/log";
 import {
   attachmentKey,
   isExtractable,
   MAX_EXTRACTED_CHARS,
   storeAttachments,
 } from "../../src/sync/attachments";
-import { createLogger } from "../../src/sync/log";
 import { attachmentOf, bytesOfLength, fakeMessage } from "./support/fake-mailbox";
 
 // The attachment half of #9: bytes to R2, metadata rows for the caller's batch,
