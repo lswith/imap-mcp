@@ -47,7 +47,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/mcp/**"],
+      "includes": ["src/**", "!src/imap/cf-imap-mailbox.ts"],
       "linter": {
         "rules": {
           "style": {
@@ -55,9 +55,8 @@
               "level": "error",
               "options": {
                 "paths": {
-                  "@imap-mcp/imap": "The MCP server must not speak IMAP. It holds no mailbox credential, and the app-specific password stays in packages/sync because only packages/sync can use it. Reads come from D1; writes are proxied over a service binding (#12).",
-                  "cf-imap": "The IMAP client is imported in exactly one file, packages/imap/src/cf-imap-mailbox.ts, and never from this worker. See the note above about the credential.",
-                  "cloudflare:sockets": "Opening a socket from the MCP server is the thing this split exists to prevent, whether or not an IMAP library is involved. Reads come from D1."
+                  "cf-imap": "The protocol client is imported in exactly one file, src/imap/cf-imap-mailbox.ts. Everything else goes through the Mailbox interface (src/imap), which is what keeps swapping the client or the provider a change to one file.",
+                  "cloudflare:sockets": "Sockets are reached only through cf-imap, which is imported only by src/imap/cf-imap-mailbox.ts. Nothing else in this Worker opens a connection."
                 }
               }
             }

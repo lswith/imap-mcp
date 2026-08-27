@@ -3,22 +3,38 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Generic IMAP to MCP server on Cloudflare Workers. Repo-wide tooling; the deployable workers live in packages/.",
+  "description": "Generic IMAP to MCP server on Cloudflare Workers: one Worker that syncs a mailbox into D1 and serves it over MCP.",
   "license": "MIT",
   "packageManager": "pnpm@11.5.2",
   "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "pnpm -r run typecheck",
-    "test": "node --test scripts/*.test.mjs && pnpm -r run test",
-    "build": "pnpm -r run build",
+    "types": "wrangler types",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "build": "wrangler deploy --dry-run",
     "dead-code": "knip",
-    "db:migrate:local": "pnpm --filter @imap-mcp/sync exec wrangler d1 migrations apply imap-mcp --local",
-    "db:migrate:remote": "pnpm --filter @imap-mcp/sync exec wrangler d1 migrations apply imap-mcp --remote"
+    "db:migrate:local": "wrangler d1 migrations apply imap-mcp --local",
+    "db:migrate:remote": "wrangler d1 migrations apply imap-mcp --remote"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "cf-imap": "1.0.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.1",
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-istanbul": "^4.1.9",
     "knip": "^6.23.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.105.0"
   }
 }

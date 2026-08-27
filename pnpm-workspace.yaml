@@ -1,6 +1,5 @@
-# Both deployable workers live under packages/.
-packages:
-  - packages/*
+# No workspace members: the repo is a single package since the workers merged
+# (#34). This file remains because it is where pnpm reads the settings below.
 
 # Minimum dependency release age (minutes): 5760 = 4 days. pnpm enforces this
 # natively at every install, including --frozen-lockfile in CI, giving new
