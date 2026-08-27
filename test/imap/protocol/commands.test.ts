@@ -179,7 +179,7 @@ describe("fetching", () => {
     // oversize message's row only ever sees a header-only fetch — so
     // In-Reply-To and References being in the requested field set is what
     // keeps oversize mail threadable. It became true with the pinned fork
-    // (lswith/cf-imap#4; upstream report Exerra/cf-imap#9). The scripted
+    // (Exerra/cf-imap#17; upstream report Exerra/cf-imap#9). The scripted
     // server answers only the fields the client asked for, so the header
     // assertions below can pass only because the request named them.
     const { server, mailbox } = await openMailbox({

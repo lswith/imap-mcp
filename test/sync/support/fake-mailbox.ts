@@ -189,7 +189,7 @@ export class FakeMailbox implements Mailbox {
  *
  * The header set is the pinned client's: SUBJECT FROM TO CC MESSAGE-ID
  * IN-REPLY-TO REFERENCES CONTENT-TYPE DATE. The threading headers joined the
- * list with the patched fork (lswith/cf-imap#4) — they are what let an
+ * list with the patched fork (Exerra/cf-imap#17) — they are what let an
  * oversize message's row keep its place in a thread, pinned by the
  * protocol-harness contract test and the oversize test in consume.test.ts.
  */

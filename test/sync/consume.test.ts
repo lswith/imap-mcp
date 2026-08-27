@@ -635,7 +635,7 @@ describe("messages too large to fetch (#9)", () => {
           text: "this must never be fetched",
           attachments: [fakeAttachment()],
           // Threading headers arrive on the header-only pass since the pinned
-          // client requests them (lswith/cf-imap#4) — an oversize row must
+          // client requests them (Exerra/cf-imap#17) — an oversize row must
           // keep its place in a thread.
           headers: {
             date: new Date("2026-08-20T09:00:00.000Z").toUTCString(),

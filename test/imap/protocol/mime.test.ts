@@ -121,7 +121,7 @@ describe("charsets", () => {
     // Unpatched cf-imap 1.0.0 matched the `iso-8859-` prefix and ran a
     // latin-1 byte loop before ever reaching its TextDecoder fallback, so
     // 0xA4 decoded as U+00A4 (¤) rather than U+20AC (€). Fixed by the fork
-    // this repo pins (lswith/cf-imap#2, upstream report Exerra/cf-imap#8);
+    // this repo pins (Exerra/cf-imap#15, upstream report Exerra/cf-imap#8);
     // this test is the contract that an upgrade or client swap must keep
     // decoding the euro sign correctly.
     const message = await fetchOne(fixtures.iso885915);
@@ -136,7 +136,7 @@ describe("charsets", () => {
     // "é" arrived as "ï¿½". Only bodies sent with no transfer encoding
     // (Content-Transfer-Encoding: 8bit) were affected — quoted-printable and
     // base64 are 7-bit on the wire and always survived. Fixed by the fork
-    // this repo pins (lswith/cf-imap#3): literals stay bytes until each
+    // this repo pins (Exerra/cf-imap#16): literals stay bytes until each
     // part's declared charset is known.
     const message = await fetchOne(fixtures.raw8Bit);
 

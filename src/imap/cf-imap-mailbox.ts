@@ -192,7 +192,7 @@ class CfImapMailbox implements Mailbox {
     await this.#run(() => this.#client.storeFlags(formatUidSet(uids), flags, mode, true));
 
     // The STORE response is deliberately discarded, even though the patched
-    // client (lswith/cf-imap#1) now parses the `MODSEQ (n)` that RFC 7162
+    // client (Exerra/cf-imap#14) now parses the `MODSEQ (n)` that RFC 7162
     // §3.1.3 appends to the untagged FETCH confirmation once CONDSTORE is
     // enabled. Reading the flags back is the only answer that is true
     // whatever the client reports, and #8/#12 both require the verification
