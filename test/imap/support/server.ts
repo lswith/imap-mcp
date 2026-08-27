@@ -281,10 +281,11 @@ export class FakeImapServer {
       case "UID FETCH": {
         const set = args.split(/\s+/)[0] ?? "";
         const wantsFullBody = /BODY(?:\.PEEK)?\[\]/i.test(args);
+        const headerFields = /HEADER\.FIELDS \(([^)]*)\)/i.exec(args)?.[1] ?? null;
         const reply: Reply = [];
         for (const [index, msg] of this.#messages.entries()) {
           if (!inUidSet(set, msg.uid, this.#highestUid())) continue;
-          reply.push(...this.#fetchItem(index + 1, msg, wantsFullBody));
+          reply.push(...this.#fetchItem(index + 1, msg, wantsFullBody, headerFields));
         }
         reply.push(`${tag} OK UID FETCH completed\r\n`);
         return reply;
@@ -374,13 +375,21 @@ export class FakeImapServer {
     }
   }
 
-  #fetchItem(seq: number, msg: FakeMessage, wantsFullBody: boolean): Reply {
+  #fetchItem(
+    seq: number,
+    msg: FakeMessage,
+    wantsFullBody: boolean,
+    headerFields: string | null,
+  ): Reply {
     const modseq = this.#condstoreEnabled ? ` MODSEQ (${this.options.highestModSeq ?? 90210})` : "";
+    // A real server echoes the requested section and returns only the fields
+    // it names — mirrored here so a test can prove a header reached the
+    // client only because the client asked for it.
     const section = wantsFullBody
       ? { label: "BODY[]", payload: msg.raw }
       : {
-          label: "BODY[HEADER.FIELDS (SUBJECT FROM TO CC MESSAGE-ID CONTENT-TYPE DATE)]",
-          payload: headerSection(msg.raw),
+          label: `BODY[HEADER.FIELDS (${headerFields ?? ""})]`,
+          payload: headerSection(msg.raw, headerFields),
         };
 
     return [
@@ -412,10 +421,35 @@ function renderFlags(flags: string[]): string {
 }
 
 /** The header block of a raw message, terminated by its blank line. */
-function headerSection(raw: Uint8Array): Uint8Array {
+function headerSection(raw: Uint8Array, fields: string | null = null): Uint8Array {
   const text = new TextDecoder().decode(raw);
   const end = text.indexOf("\r\n\r\n");
-  return encoder.encode(end === -1 ? text : `${text.slice(0, end)}\r\n\r\n`);
+  let header = end === -1 ? text : text.slice(0, end);
+
+  if (fields !== null) {
+    const wanted = new Set(
+      fields
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((field) => field.toLowerCase()),
+    );
+    const kept: string[] = [];
+    let keeping = false;
+    for (const line of header.split("\r\n")) {
+      // Folded continuation lines belong to the preceding field.
+      if (/^[ \t]/.test(line)) {
+        if (keeping) kept.push(line);
+        continue;
+      }
+      const name = line.slice(0, line.indexOf(":")).trim().toLowerCase();
+      keeping = wanted.has(name);
+      if (keeping) kept.push(line);
+    }
+    header = kept.join("\r\n");
+  }
+
+  return encoder.encode(`${header}\r\n\r\n`);
 }
 
 /** Matches a UID against an IMAP sequence set: "5", "1:3", "1,4:*". */

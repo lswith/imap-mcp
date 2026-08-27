@@ -159,3 +159,16 @@ Content-Transfer-Encoding: base64
 
 !!!! not base64 at all !!!!
 `);
+
+/** A reply carrying the threading headers (RFC 5322 §3.6.4). */
+export const threadReply = message(`From: ada@example.com
+To: bob@example.com
+Subject: Re: Hello, world!
+Message-ID: <reply-1@example.com>
+In-Reply-To: <plain-1@example.com>
+References: <root-0@example.com> <plain-1@example.com>
+Date: Thu, 20 Aug 2026 10:00:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+A reply.
+`);

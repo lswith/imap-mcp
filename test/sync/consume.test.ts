@@ -609,6 +609,14 @@ describe("messages too large to fetch (#9)", () => {
           subject: "Ten years of photos",
           text: "this must never be fetched",
           attachments: [fakeAttachment()],
+          // Threading headers arrive on the header-only pass since the pinned
+          // client requests them (lswith/cf-imap#4) — an oversize row must
+          // keep its place in a thread.
+          headers: {
+            date: new Date("2026-08-20T09:00:00.000Z").toUTCString(),
+            "in-reply-to": "<1@example.invalid>",
+            references: "<root@example.invalid> <1@example.invalid>",
+          },
         }),
       ],
     });
@@ -625,22 +633,37 @@ describe("messages too large to fetch (#9)", () => {
     expect(bodyFetches(mailbox).map((fetch) => fetch.uids)).toEqual([[1]]);
 
     const rows = await env.DB.prepare(
-      "SELECT uid, subject, body_text AS bodyText, oversize, size_bytes AS sizeBytes FROM messages ORDER BY uid",
+      "SELECT uid, subject, body_text AS bodyText, oversize, size_bytes AS sizeBytes, " +
+        "in_reply_to AS inReplyTo, reference_ids AS referenceIds FROM messages ORDER BY uid",
     ).all<{
       uid: number;
       subject: string;
       bodyText: string | null;
       oversize: number;
       sizeBytes: number;
+      inReplyTo: string | null;
+      referenceIds: string;
     }>();
     expect(rows.results).toEqual([
-      { uid: 1, subject: "Message 1", bodyText: "small", oversize: 0, sizeBytes: 1024 },
+      {
+        uid: 1,
+        subject: "Message 1",
+        bodyText: "small",
+        oversize: 0,
+        sizeBytes: 1024,
+        inReplyTo: null,
+        referenceIds: "[]",
+      },
       {
         uid: 2,
         subject: "Ten years of photos",
         bodyText: null,
         oversize: 1,
         sizeBytes: 40 * 1024 * 1024,
+        // From the header-only pass: an oversize message has no body row, but
+        // it threads.
+        inReplyTo: "<1@example.invalid>",
+        referenceIds: '["<root@example.invalid>","<1@example.invalid>"]',
       },
     ]);
     expect(await storedKeys()).toEqual([]);
