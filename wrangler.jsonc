@@ -3,7 +3,7 @@
   "name": "imap-mcp",
   "main": "src/index.ts",
   // Pinned to the newest date the toolchain actually runs: the workerd bundled
-  // with @cloudflare/vitest-pool-workers caps out here, and a later date makes
+  // with @cloudflare/vitest-plugin caps out here, and a later date makes
   // every test fail to boot rather than fail a check. Move it forward only
   // together with that dependency.
   "compatibility_date": "2026-08-15",

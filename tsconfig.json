@@ -9,7 +9,7 @@
     "noEmit": true,
     // Checking inside .d.ts files is off because of what is in node_modules,
     // and for nothing in this repository: with it off, the only errors left
-    // are fifteen inside @cloudflare/vitest-pool-workers, tinybench and the
+    // are fifteen inside @cloudflare/vitest-plugin, tinybench and the
     // MCP SDK's own declarations. Nothing in src/ or test/ is skipped by this
     // -- those are checked in full -- and this repository's own declaration
     // files are clean with it off. That is the property worth keeping: if a
@@ -32,7 +32,7 @@
     // about all of them. The package stays installed for vitest.config.ts,
     // which is outside this project's `include` and therefore typed with the
     // defaults. Add it back the day something here imports `node:`.
-    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"]
+    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-plugin/types"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]
 }
