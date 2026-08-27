@@ -17,6 +17,9 @@
 /** Matches the ACCESS_AUD in vitest.config.ts. */
 export const AUD = "0d3ad0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d";
 
+/** Matches the MCP_API_KEY in vitest.config.ts. A fictional value, like AUD. */
+export const API_KEY = "test-api-key-9Yl3u4vZs1QeXKp7RbT2wA==";
+
 /** A context for a request Access authenticated for this application. */
 export function authenticated(overrides: { aud?: string; email?: string } = {}) {
   return {

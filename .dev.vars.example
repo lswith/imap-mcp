@@ -1,15 +1,25 @@
 # Local secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored).
 #
 # In production these are set with `wrangler secret put <NAME>`, NOT in
-# wrangler.jsonc -- that file is committed to a public repository.
+# wrangler.jsonc -- that file is committed to a public repository. Both are
+# declared as required in wrangler.jsonc (`secrets.required`), so a deploy
+# fails until they are set, and `wrangler dev` warns when either is missing
+# here.
 
 # App-specific password for the mailbox. Generate one at appleid.apple.com for
 # iCloud. It grants FULL mailbox access, including SMTP send, so treat it as
 # equivalent to the account password and rotate it by revoking the old one.
 IMAP_PASSWORD=dev_only_change_me
 
+# The bearer token MCP clients present in API-key mode (#35). Generate one:
+#   openssl rand -base64 32
+# Rotation is replacing this value (locally here; in production with
+# `wrangler secret put MCP_API_KEY`).
+MCP_API_KEY=dev_only_change_me_too
+
 # There is nothing to put here for Cloudflare Access. The gate reads
-# `ctx.access`, which the runtime populates and no file can — so with Access
-# configured, `wrangler dev` answers 401 to everything. That is the gate
-# failing closed, not a bug. Most work on the MCP tools happens through
-# `pnpm run test` / `test:watch` instead, which drive the handler directly.
+# `ctx.access`, which the runtime populates and no file can -- so locally,
+# leave ACCESS_AUD unset and the endpoint runs in API-key mode: point a client
+# at http://localhost:8787/mcp with `Authorization: Bearer <MCP_API_KEY>`.
+# Most work on the MCP tools happens through `pnpm run test` / `test:watch`
+# instead, which drive the handler directly.

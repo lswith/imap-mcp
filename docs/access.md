@@ -1,5 +1,16 @@
 # Gating the MCP endpoint with Cloudflare Access
 
+> **Status (#34, #35):** parts of this page predate the single-Worker merge and
+> the two-mode authentication that followed it. Access is now the *optional
+> upgrade*: a fresh deploy is authenticated by the required `MCP_API_KEY`
+> secret and works immediately, and setting `ACCESS_AUD` upgrades the instance
+> to Access and refuses the key from then on (delete the audience to fall
+> back). Where this page says an instance without an audience answers `500`,
+> or that the worker is unreachable without a route, read it against
+> `src/mcp/auth.ts` and `.env.example` — the Access *procedure* below (Worker
+> destination, Managed OAuth, audience pinning) is unchanged. The docs
+> restructure is [#37](https://github.com/lswith/imap-mcp/issues/37).
+
 The MCP endpoint has no folder fence, so it is functionally read access to the
 whole mailbox. Authentication is the load-bearing control in this design, not
 hygiene on top of it — which is why the worker verifies the Access token itself

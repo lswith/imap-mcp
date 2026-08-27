@@ -22,13 +22,22 @@
   // Reachable by default, and deliberately so (#34): a one-click deploy needs
   // an address, and with one Worker there is no unreachable background half to
   // protect. This is a reduction from two independent layers to one -- the
-  // authentication gate (src/mcp/access.ts) is now what holds the line, and an
-  // instance with no ACCESS_AUD configured answers 500, never an
-  // unauthenticated 200. #35 replaces that posture with an API-key floor.
-  // preview_urls stays false: a versioned preview URL is a second hostname
-  // nobody asked for.
+  // authentication gate (src/mcp/auth.ts) is what holds the line: every
+  // request needs the MCP_API_KEY secret as a bearer token, or Cloudflare
+  // Access once ACCESS_AUD is set (#35). preview_urls stays false: a
+  // versioned preview URL is a second hostname nobody asked for.
   "workers_dev": true,
   "preview_urls": false,
+  // The unconfigured case is guarded here, at deploy time, not at runtime
+  // (#35): `wrangler deploy` and `wrangler versions upload` fail, listing the
+  // missing names, until both secrets are set — so an unauthenticated instance
+  // is not a state a deploy can reach, and `wrangler types` generates both as
+  // non-optional so the code cannot branch on their absence. ACCESS_AUD is
+  // deliberately NOT here: it is the optional upgrade (see src/mcp/auth.ts),
+  // and it cannot exist before the Worker does.
+  //
+  // Generate an API key with:  openssl rand -base64 32
+  "secrets": { "required": ["IMAP_PASSWORD", "MCP_API_KEY"] },
   // The index. One database, one Worker: the sync half writes it, the MCP half
   // reads it.
   //
@@ -111,8 +120,11 @@
   //   SYNC_MAX_CHUNKS_PER_RUN          -- ranges one cron tick may queue
   //   SYNC_MAX_FETCH_BYTES             -- byte budget for one FETCH; the ceiling on one message
   //   SYNC_SINCE                       -- optional ISO date floor
-  //   ACCESS_AUD                       -- the Access application's audience tag
+  //   ACCESS_AUD                       -- the optional Access upgrade (#35): set it
+  //                                       and Access is required, the API key refused
   //
-  // Secrets (set with `pnpm exec wrangler secret put`):
+  // The two required secrets are declared in `secrets` above and set with
+  // `pnpm exec wrangler secret put` (or --secrets-file on a first deploy):
   //   IMAP_PASSWORD -- app-specific password, full mailbox access incl. SMTP send
+  //   MCP_API_KEY   -- the bearer token MCP clients present in API-key mode
 }
