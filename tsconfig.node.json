@@ -1,0 +1,27 @@
+{
+  // The Node half of the repository: the files that configure the tools, run
+  // on your machine, and are never bundled into the Worker. Today that is
+  // vitest.config.ts and nothing else.
+  //
+  // It needs its own project because it is typed against a different runtime.
+  // tsconfig.json describes code that runs in workerd, where there is no
+  // `process` and no `node:fs`; this describes code that runs in Node, where
+  // there is. One `types` array cannot be both -- @types/node's web globals
+  // and workerd's runtime types disagree about Request, streams and crypto
+  // roughly 143 times -- so there are two projects rather than one compromise.
+  //
+  // Without this, vitest.config.ts was checked by nothing at all: it sits
+  // outside the root project's `include`, so `const x: number = "no"` in it
+  // was a clean typecheck. The harness that decides how every test runs is
+  // worth as much checking as the tests.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Node, and deliberately not the Worker runtime types: this file never
+    // runs in workerd. The pool's own types come with the import.
+    "types": ["node"],
+    // Vitest reads this file through Vite, which resolves like a bundler.
+    "moduleResolution": "Bundler",
+    "module": "ES2022"
+  },
+  "include": ["vitest.config.ts"]
+}
