@@ -19,8 +19,12 @@ name: Release Please
 #     so CI will not run on the release PR by itself. Close and reopen it (or
 #     push to it) to run CI, or merge on the strength of main being green,
 #     which it is by construction: everything in the PR is already on main.
-#   - The version line stays pre-1.0 (bump-minor-pre-major in
-#     release-please-config.json) until stability is actually being offered.
+#   - The version line stays pre-1.0 until stability is actually being
+#     offered: the manifest starts empty, so the first run takes the
+#     initial-version path (0.1.0, release-please-config.json) and every later
+#     bump is governed by bump-minor-pre-major. The first release PR is still
+#     reviewed before merge — if it proposes the wrong version, a
+#     "Release-As:" footer on an empty commit overrides it.
 
 on:
   push:
