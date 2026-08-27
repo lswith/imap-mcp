@@ -13,7 +13,21 @@
   // Nothing about this Worker's behaviour changes with it: no compatibility
   // flag defaults between 2026-08-15 and 2026-08-20.
   "compatibility_date": "2026-08-20",
-  "compatibility_flags": ["nodejs_compat"],
+  // No compatibility_flags, and Node compatibility is still on. Since
+  // 2026-08-04 the date enables `nodejs_compat` and `nodejs_compat_v2` by
+  // itself, and declaring them again changes nothing -- the tooling ignores
+  // the redundant flags -- so the list was noise claiming to be a decision.
+  //
+  // Confirmed by importing `node:buffer` inside workerd under this exact
+  // config, which resolves and works. (The header of the generated runtime
+  // types is NOT the evidence: it echoes the flags declared here, so it stops
+  // naming nodejs_compat the moment the redundant entry goes, whether or not
+  // the behaviour is still on. It is.)
+  //
+  // What this does change is where that compatibility comes from: the DATE
+  // now carries it. Lowering the date below 2026-08-04 without putting
+  // `nodejs_compat` back would take node:crypto, node:buffer and the rest
+  // away from every dependency that expects them.
   // `logs.invocation_logs` groups every console.log/error emitted during a run
   // into a single timeline in the dashboard (Workers & Pages -> this worker ->
   // Logs) -- the "breadcrumbs" behind an error, at 100% sampling.
