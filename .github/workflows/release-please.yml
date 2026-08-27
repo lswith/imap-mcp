@@ -16,9 +16,12 @@ name: Release Please
 # Two operational notes:
 #   - The release PR is opened with the workflow's GITHUB_TOKEN, and GitHub
 #     deliberately does not trigger workflows on events that token creates —
-#     so CI will not run on the release PR by itself. Close and reopen it (or
-#     push to it) to run CI, or merge on the strength of main being green,
-#     which it is by construction: everything in the PR is already on main.
+#     so CI will not run on the release PR by itself. Since `ci` is a required
+#     check on main (CONTRIBUTING.md, "How a change lands"), it has to be made
+#     to run: close and reopen the PR, or push to it. Merging on the strength
+#     of main being green — true by construction, everything in the PR is
+#     already on main — is no longer a way out, and deliberately so: the rule
+#     binds the maintainer too, or it is not a rule.
 #   - The version line stays pre-1.0 until stability is actually being
 #     offered: the manifest starts empty, so the first run takes the
 #     initial-version path (0.1.0, release-please-config.json) and every later
