@@ -11,7 +11,7 @@
  * What that buys and what it costs is worth being honest about: every branch of
  * the gate is exercised, but the step where Cloudflare decides to populate
  * `ctx.access` at all is Cloudflare's, and only a deploy can prove it. The
- * post-deploy checks in docs/access.md are that proof.
+ * post-deploy checks in docs/authentication.md are that proof.
  */
 
 /** Matches the ACCESS_AUD in vitest.config.ts. */

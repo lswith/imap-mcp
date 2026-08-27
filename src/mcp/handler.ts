@@ -8,7 +8,7 @@
  * between the mailbox index and the internet: every request is refused unless
  * it carries the API key, or — once the Access upgrade is configured —
  * Cloudflare Access authenticated it for this application. See
- * src/mcp/auth.ts and docs/access.md.
+ * src/mcp/auth.ts and docs/authentication.md.
  */
 
 import {
