@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Generic IMAP to MCP server on Cloudflare Workers: one Worker that syncs a mailbox into D1 and serves it over MCP.",
+  "cloudflare": {
+    "bindings": {
+      "IMAP_HOST": "Your mailbox's IMAP hostname. For iCloud: imap.mail.me.com",
+      "IMAP_USER": "Your mailbox user. For iCloud this is the LOCAL PART ONLY of the address -- \"ada\", not \"ada@icloud.com\".",
+      "IMAP_PASSWORD": "An app-specific password for that mailbox, NOT your account password. iCloud: appleid.apple.com -> Sign-In and Security -> App-Specific Passwords.",
+      "MCP_API_KEY": "The bearer token your MCP clients will present to this server. Generate a random one: openssl rand -base64 32"
+    }
+  },
   "license": "MIT",
   "packageManager": "pnpm@11.5.2",
   "scripts": {

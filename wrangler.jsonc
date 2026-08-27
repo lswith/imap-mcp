@@ -46,12 +46,13 @@
   // throttles and the log level live here, and IMAP_HOST, IMAP_USER,
   // SYNC_SINCE, DRAFT_FROM, DRAFTS_FOLDER and ACCESS_AUD do not -- they name
   // one person's mailbox or one Zero Trust application, and this file is
-  // committed to a public repository. Add those in a fork (see .env.example),
-  // in the dashboard -- `keep_vars` below is what makes those survive a deploy
-  // -- or as secrets, which a deploy never touches. Deploying THIS repository
-  // rather than a fork of it, which is the case for whoever maintains it, the
-  // last two are the options: there is no private file to put them in
-  // (docs/deploy.md).
+  // committed to a public repository. The mailbox pair -- IMAP_HOST and
+  // IMAP_USER -- is asked for AT DEPLOY TIME instead, alongside the two
+  // secrets: .dev.vars.example is the prompt list the "Deploy to Cloudflare"
+  // button reads, and a secret is never committed and never deleted by a
+  // deploy. The rest (SYNC_SINCE, DRAFT_FROM, DRAFTS_FOLDER, ACCESS_AUD) are
+  // vars a deployer adds afterwards, in a fork's config or in the dashboard,
+  // where `keep_vars` below keeps them. See docs/configuration.md.
   //
   // Every value here restates the default in src/sync/config.ts, so this block
   // changes no behaviour -- what it changes is that `wrangler deploy` prints
@@ -174,12 +175,13 @@
   // Not committed, and deliberately absent until the tickets that need them:
   //   account_id  -- set CLOUDFLARE_ACCOUNT_ID in your environment instead
   //   routes      -- your own zone, if you prefer a custom hostname over
-  //                  workers.dev; see .env.example
+  //                  workers.dev; see docs/configuration.md
   //
   // The `vars` block above carries the knobs. What it deliberately leaves out
   // is everything that identifies you, which src/env.d.ts declares the shape
-  // of instead. Add these in a fork, or -- deploying this repository itself --
-  // in the dashboard or as secrets (see .env.example, docs/deploy.md):
+  // of instead. IMAP_HOST and IMAP_USER are prompted for at deploy time (see
+  // .dev.vars.example); these are the optional rest, added as vars in a fork's
+  // config or in the dashboard (docs/configuration.md):
   //   IMAP_HOST, IMAP_USER  -- the mailbox. Without them the cron fails,
   //                            hourly and by name, in the logs
   //   SYNC_SINCE            -- optional ISO date floor

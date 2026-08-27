@@ -6,11 +6,13 @@
  * identifies someone is only declared here. So the sizing knobs and LOG_LEVEL
  * ship with committed defaults, while IMAP_HOST, IMAP_USER, SYNC_SINCE, the
  * draft settings and the Access audience — one person's mailbox, one Zero
- * Trust application — are added by the deployer in their own fork or in the
- * dashboard, and this public repository never learns them. .env.example
- * documents the values; `wrangler types` can only generate Env entries for
- * what the committed config declares, so the rest of the shape is declared
- * here — the same trick test/env.d.ts uses for TEST_MIGRATIONS.
+ * Trust application — are supplied by the deployer and never learned by this
+ * public repository: the mailbox pair is prompted for at deploy time and
+ * stored as secrets (.dev.vars.example), and the rest are vars added
+ * afterwards. docs/configuration.md documents every value; `wrangler types`
+ * can only generate Env entries for what the committed config declares, so
+ * the rest of the shape is declared here — the same trick test/env.d.ts uses
+ * for TEST_MIGRATIONS.
  *
  * The committed ones are declared here too, deliberately duplicating what
  * `wrangler types` generates from the config: generation types them as the

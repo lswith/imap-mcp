@@ -53,8 +53,9 @@ fits comfortably in the paid plan's included usage for one mailbox. You also
 need a mailbox **app-specific password**; on iCloud it grants full mailbox
 access including SMTP send, so treat it like the account password.
 
-The button provisions the database, queues and bucket, prompts for the two
-required secrets — the mailbox password and an MCP API key — and deploys.
+The button provisions the database, queues and bucket, prompts for the four
+values only you can supply — the mailbox host, the mailbox user, its
+app-specific password, and an MCP API key of your choosing — and deploys.
 Migrations run inside the deploy script, so the schema is applied on the first
 deploy and on every redeploy after you merge an upstream change. You get a
 working endpoint authenticated by the API key; putting Cloudflare Access in
@@ -100,6 +101,7 @@ scripted-server harness.
 | --- | --- |
 | [`docs/architecture.md`](./docs/architecture.md) | the design essay: sync internals, gap detection, the schema, the untrusted-content envelope, the IMAP client's quirks |
 | [`docs/deploy.md`](./docs/deploy.md) | nothing → working instance: button, manual path, secrets, migrations |
+| [`docs/configuration.md`](./docs/configuration.md) | every value the Worker reads: the four a deploy prompts for, the committed knobs, and the optional extras |
 | [`docs/authentication.md`](./docs/authentication.md) | API key vs Cloudflare Access, the upgrade ordering, lockout recovery |
 | [`docs/observability.md`](./docs/observability.md) | is it working? the `/status` document, the log lines, the queues, a stalled backfill |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | running the suite offline, the provider-test requirement, triage |
