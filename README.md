@@ -68,6 +68,15 @@ manual path, and the configuration reference.
 [`docs/authentication.md`](./docs/authentication.md) covers the two auth modes
 and the trade between them.
 
+Deployed and not sure it is working? Ask it:
+
+```bash
+curl -s -H "Authorization: Bearer $MCP_API_KEY" https://<worker>.workers.dev/status | jq
+```
+
+[`docs/observability.md`](./docs/observability.md) reads that document line by
+line, and covers the logs, the queues, and what a stalled backfill looks like.
+
 ## Quickstart, for working on it
 
 No Cloudflare account needed — the whole suite runs offline:
@@ -92,6 +101,7 @@ scripted-server harness.
 | [`docs/architecture.md`](./docs/architecture.md) | the design essay: sync internals, gap detection, the schema, the untrusted-content envelope, the IMAP client's quirks |
 | [`docs/deploy.md`](./docs/deploy.md) | nothing → working instance: button, manual path, secrets, migrations |
 | [`docs/authentication.md`](./docs/authentication.md) | API key vs Cloudflare Access, the upgrade ordering, lockout recovery |
+| [`docs/observability.md`](./docs/observability.md) | is it working? the `/status` document, the log lines, the queues, a stalled backfill |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | running the suite offline, the provider-test requirement, triage |
 | [`SECURITY.md`](./SECURITY.md) | the reporting channel, and an honest list of what is and is not guaranteed |
 | [`AGENTS.md`](./AGENTS.md) | the compact invariants file for agents and humans alike |

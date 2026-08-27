@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createLogger } from "../../src/log";
 import { readSyncConfig } from "../../src/sync/config";
-import { createLogger } from "../../src/sync/log";
 import { createDraft, flagMessage, moveMessage } from "../../src/sync/writes";
 import type { DraftRequest, FlagRequest, MoveRequest } from "../../src/writes";
 import { WritableMailbox, type WritableMailboxOptions } from "./support/writable-mailbox";

@@ -66,6 +66,16 @@
       }
     },
     {
+      "includes": ["src/**", "!src/log.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "error"
+          }
+        }
+      }
+    },
+    {
       "includes": ["**/*.test.ts", "**/test/**"],
       "linter": {
         "rules": {

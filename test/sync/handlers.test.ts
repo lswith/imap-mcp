@@ -2,6 +2,7 @@ import { createExecutionContext, createMessageBatch, env, getQueueResult } from 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ImapAuthError, ImapProtocolError, type Mailbox } from "../../src/imap";
 import worker from "../../src/index";
+import { describeError } from "../../src/log";
 import { SyncConfigError } from "../../src/sync/config";
 import {
   createWriteService,
@@ -11,7 +12,6 @@ import {
   handleQueue,
   handleScheduled,
 } from "../../src/sync/handlers";
-import { describeError } from "../../src/sync/log";
 import { CHUNK_QUEUE, DEAD_LETTER_QUEUE, type SyncChunk } from "../../src/sync/queue";
 import type { DraftRequest, FlagRequest, MoveRequest } from "../../src/writes";
 import { FakeMailbox, fakeAttachment, fakeMessage } from "./support/fake-mailbox";
@@ -505,7 +505,7 @@ describe("the credential", () => {
     expect(refused.ok ? "" : refused.reason).not.toContain(password);
 
     // And the whole config object, in case a future log line reaches for it.
-    const { createLogger } = await import("../../src/sync/log");
+    const { createLogger } = await import("../../src/log");
     createLogger(syncEnv()).error(`config: ${JSON.stringify(syncEnv())}`);
 
     for (const spy of spies) spy.mockRestore();

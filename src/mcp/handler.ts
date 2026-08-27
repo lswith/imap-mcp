@@ -16,13 +16,27 @@ import {
   localhostAllowedOrigins,
   originValidationResponse,
 } from "@modelcontextprotocol/server";
+import { createLogger, type Logger, since } from "../log";
+import { collectStatus, statusResponse } from "../status";
 import { createWriteService } from "../sync/handlers";
 import type { WriteService } from "../writes";
 import { verifyAuth } from "./auth";
 import { createServer } from "./server";
 
-/** The one path this worker serves. Everything else is a 404, not a handler. */
+/** The MCP endpoint: the one path that serves mail. */
 const ENDPOINT = "/mcp";
+
+/**
+ * The diagnostics document. Behind the same gate, after the same Origin
+ * check — see src/status.ts for what it answers and why it is not public.
+ *
+ * A second path, where there was deliberately only one. The argument for it is
+ * that the alternative is worse: the questions it answers were being answered
+ * with `wrangler d1 execute` against production, which needs the account, the
+ * database id and the schema in your head — and cannot be answered at all by
+ * the person a deploy button just handed a URL to.
+ */
+const STATUS = "/status";
 
 /**
  * The fetch path, as a plain function of its inputs.
@@ -47,6 +61,10 @@ export async function handleRequest(
   writer: WriteService = createWriteService(env),
 ): Promise<Response> {
   const url = new URL(request.url);
+  const startedAt = Date.now();
+  // The fetch half said nothing at all until now, which is why a Worker that
+  // was refusing every request looked exactly like one nobody had called.
+  const log = createLogger(env, "mcp");
 
   // Discovery, answered before the gate and without a token — a caller that
   // had one would not be asking. The MCP authorization spec makes RFC 9728
@@ -58,9 +76,16 @@ export async function handleRequest(
   // With Access in front, the edge answers this first and the copy below is
   // never reached. Its audience is the backstop and `wrangler dev`.
   const discovery = protectedResourceMetadata(request, url);
-  if (discovery) return discovery;
+  if (discovery) {
+    log.debug(`${request.method} ${url.pathname} -> discovery`);
+    return discovery;
+  }
 
-  if (url.pathname !== ENDPOINT) {
+  if (url.pathname !== ENDPOINT && url.pathname !== STATUS) {
+    // At debug, not info: this hostname is on the public internet and is
+    // scanned like every other one. A line per probe would bury the lines
+    // that mean something.
+    log.debug(`${request.method} ${url.pathname} -> 404`);
     return new Response("Not Found\n", {
       status: 404,
       headers: { "content-type": "text/plain; charset=utf-8" },
@@ -81,7 +106,14 @@ export async function handleRequest(
   // question about the caller's kind rather than its identity, which is why
   // it still runs ahead of Access below.
   const rejected = originValidationResponse(request, localhostAllowedOrigins());
-  if (rejected) return rejected;
+  if (rejected) {
+    // Warned, not noted. This fires for a browser page posting at a Worker it
+    // was not meant to reach, which is either a misconfigured client or the
+    // attack the check exists for — and both are worth seeing without turning
+    // debug on.
+    log.warn(`${request.method} ${url.pathname} -> ${rejected.status}, cross-origin request`);
+    return rejected;
+  }
 
   // Authentication (#35): the API key, or Cloudflare Access once the audience
   // is configured — precedence, not fallback (src/mcp/auth.ts).
@@ -100,7 +132,16 @@ export async function handleRequest(
   // that a cross-origin probe gets 403 rather than 401, which tells an
   // attacker nothing they did not already supply.
   const auth = await verifyAuth(request, env, ctx.access);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    // The reason is for this line only — the caller gets the same 401 either
+    // way. It is the difference between "the key is wrong" and "Access is not
+    // in front of this Worker", which is otherwise a question a deployer can
+    // only answer by re-reading their own configuration.
+    log.warn(`${request.method} ${url.pathname} -> 401 in ${auth.mode} mode: ${auth.reason}`);
+    return auth.response;
+  }
+
+  if (url.pathname === STATUS) return await handleStatus(request, env, auth.mode, log, startedAt);
 
   // Built per request, deliberately. The factory `createMcpHandler` calls is
   // handed no `env`, so a handler held at module scope would close over
@@ -110,7 +151,48 @@ export async function handleRequest(
   // The Access context rides through to the write tools (#12), which need an
   // actor for the audit row. Handed over whole rather than resolved here:
   // `getIdentity()` is a call, and a search has no business paying for one.
-  return createMcpHandler(() => createServer(env, writer, auth.access)).fetch(request);
+  const response = await createMcpHandler(() => createServer(env, writer, auth.access, log)).fetch(
+    request,
+  );
+  // One line per request, which is what makes "is anything calling this?" a
+  // question the dashboard answers. What each tool did is logged by the tools
+  // themselves — a single MCP request can carry several.
+  log.info(
+    `${request.method} ${url.pathname} -> ${response.status} in ${since(startedAt)}ms ` +
+      `(${auth.mode})`,
+  );
+  return response;
+}
+
+/**
+ * The diagnostics document, for a caller that has already authenticated.
+ *
+ * GET or HEAD only, and the mailbox probe only when it is asked for by name:
+ * a connection to the mailbox is not something a URL should be able to cause
+ * by accident.
+ */
+async function handleStatus(
+  request: Request,
+  env: Env,
+  mode: string,
+  log: Logger,
+  startedAt: number,
+): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("Method Not Allowed\n", {
+      status: 405,
+      headers: { "content-type": "text/plain; charset=utf-8", allow: "GET, HEAD" },
+    });
+  }
+
+  const probe = new URL(request.url).searchParams.get("probe") === "mailbox";
+  const report = await collectStatus(env, { probe });
+  const response = statusResponse(env, report);
+  log.info(
+    `${request.method} /status -> ${response.status} in ${since(startedAt)}ms (${mode}` +
+      `${probe ? ", probed the mailbox" : ""})`,
+  );
+  return response;
 }
 
 /**

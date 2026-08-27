@@ -111,6 +111,36 @@ export function readSyncConfig(env: Env): SyncConfig {
   return config;
 }
 
+/**
+ * The configuration in effect, as one line.
+ *
+ * Printed at the start of every cron tick and reported by GET /status, because
+ * "which folders, at what pace" is the first question a mailbox that is not
+ * indexing what its owner expects actually raises — and until now the only way
+ * to answer it was to read the deploy that set the vars.
+ *
+ * Which folders and at what pace, and nothing that says whose mailbox it is:
+ * not the password, which must never reach a log line at all; not the
+ * username; and not the host either, which on a custom domain names an
+ * organisation. None of the three change how a tick reads. Both of the last
+ * two are still reachable when they are the question — the host on the
+ * connection line at `debug` (src/sync/session.ts), and both in the status
+ * document, which answers one authenticated caller who asked rather than
+ * writing it down hourly.
+ */
+export function describeSyncConfig(config: SyncConfig): string {
+  const parts = [
+    `folders ${config.folders.join(", ")}`,
+    `${config.chunkUids} uids/range`,
+    `${config.chunkSize} messages/fetch`,
+    `${config.enumerateWindow}-uid window`,
+    `${config.maxChunksPerRun} ranges/run`,
+    `${config.maxFetchBytes}-byte ceiling`,
+  ];
+  if (config.since) parts.push(`since ${config.since.toISOString().slice(0, 10)}`);
+  return parts.join("; ");
+}
+
 function required(value: string | undefined, name: string): string {
   const trimmed = value?.trim();
   if (!trimmed) throw new SyncConfigError(`${name} is not set`);

@@ -21,10 +21,10 @@
  * into a decision taken before any bytes move.
  */
 
-import type { FolderState, Mailbox, MailboxMessage } from "../imap";
+import { type FolderState, formatUidSet, type Mailbox, type MailboxMessage } from "../imap";
+import { describeError, type Logger } from "../log";
 import { storeAttachments } from "./attachments";
 import type { SyncConfig } from "./config";
-import { describeError, type Logger } from "./log";
 import { toMessageRow } from "./normalise";
 import type { SyncChunk } from "./queue";
 import { type MessageWrite, storeMessages } from "./store";
@@ -37,12 +37,35 @@ export type ChunkOutcome = {
   /** Messages recorded from their headers because they were too large to fetch. */
   oversize: number;
   /**
+   * Uids enumeration saw that this range could not store.
+   *
+   * Not an error, and not retryable either — the fetch succeeded, it just
+   * answered for fewer uids than were asked about (a message deleted between
+   * the SEARCH and the FETCH is the ordinary reason). It is counted because of
+   * what it costs: gap detection counts rows, so every uid in here keeps its
+   * bucket short, and a short bucket below the folder's first hole pins the
+   * watermark and re-queues the range on every tick, for ever. A number that
+   * does not go down across ticks is the signature of that, which is why it
+   * reaches the invocation line rather than staying an internal detail. What
+   * to DO about a uid the server will not hand over is #54.
+   */
+  missing: number;
+  /**
    * The range no longer describes anything that exists — the folder was
    * renumbered after enumeration, or is gone from the server altogether — so
    * it was dropped rather than retried.
    */
   stale: boolean;
 };
+
+/**
+ * How many uids a warning names before it stops naming them.
+ *
+ * A range is 100 uids by default and every one of them can be missing, which
+ * is a log line nobody reads. The runs are what identify the hole; the count
+ * beside them says whether the list was cut.
+ */
+const MAX_LISTED_UIDS = 20;
 
 export async function consumeChunk(
   env: Env,
@@ -63,7 +86,7 @@ export async function consumeChunk(
     log.warn(
       `${chunk.folder}: not on the server — dropping uids ${chunk.from}:${chunk.to} as stale`,
     );
-    return { stored: 0, attachments: 0, oversize: 0, stale: true };
+    return { stored: 0, attachments: 0, oversize: 0, missing: 0, stale: true };
   }
   const uidValidity = state.uidValidity ?? 0;
 
@@ -75,7 +98,7 @@ export async function consumeChunk(
       `${chunk.folder}: UIDVALIDITY is ${uidValidity}, not ${chunk.uidValidity} — ` +
         `dropping uids ${chunk.from}:${chunk.to} as stale`,
     );
-    return { stored: 0, attachments: 0, oversize: 0, stale: true };
+    return { stored: 0, attachments: 0, oversize: 0, missing: 0, stale: true };
   }
 
   // Headers and RFC822.SIZE for the whole range, before a single body is
@@ -83,7 +106,36 @@ export async function consumeChunk(
   // messages can be fetched at all and how many may travel together.
   const sized = await mailbox.fetchMessages({ uids: chunk.uids, includeBody: false });
 
-  const outcome: ChunkOutcome = { stored: 0, attachments: 0, oversize: 0, stale: false };
+  const outcome: ChunkOutcome = {
+    stored: 0,
+    attachments: 0,
+    oversize: 0,
+    missing: 0,
+    stale: false,
+  };
+
+  // What the server did not answer for, said out loud.
+  //
+  // This is the one failure in the sync path that is invisible from its
+  // outcome: nothing threw, nothing retried, the range acked, and the bucket
+  // is short anyway. Left unlogged it presents hours later as a folder whose
+  // watermark stopped moving while every tick still queues work — which is
+  // unreadable from D1 alone, because a row that was never written leaves no
+  // trace of itself. Naming the uids here makes it a question about specific
+  // messages, answerable by asking the server about them.
+  const answered = new Set(sized.map((message) => message.uid));
+  const unanswered = chunk.uids.filter((uid) => !answered.has(uid));
+  outcome.missing = unanswered.length;
+  if (unanswered.length > 0) {
+    const listed = unanswered.slice(0, MAX_LISTED_UIDS);
+    const rendered = formatUidSet(listed) + (unanswered.length > listed.length ? ", ..." : "");
+    log.warn(
+      `${chunk.folder}: ${unanswered.length} of ${chunk.uids.length} uids in ` +
+        `${chunk.from}:${chunk.to} returned no headers (${rendered}) — enumeration saw them, so ` +
+        `this bucket stays short and the range is re-queued every tick until they are stored or ` +
+        `stop appearing in SEARCH`,
+    );
+  }
   const fetchable: MailboxMessage[] = [];
   const skipped: MessageWrite[] = [];
 
@@ -100,7 +152,13 @@ export async function consumeChunk(
     outcome.oversize += skipped.length;
   }
 
-  for (const slice of planSlices(fetchable, config.chunkSize, config.maxFetchBytes)) {
+  const slices = planSlices(fetchable, config.chunkSize, config.maxFetchBytes);
+  log.debug(
+    `${chunk.folder} ${chunk.from}:${chunk.to}: ${sized.length} headers, ` +
+      `${fetchable.length} fetchable in ${slices.length} fetch(es), ${skipped.length} oversize`,
+  );
+
+  for (const slice of slices) {
     const messages = await mailbox.fetchMessages({
       uids: slice.map((message) => message.uid),
       includeBody: true,

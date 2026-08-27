@@ -49,11 +49,13 @@ When it finishes you have a Worker at
 `https://imap-mcp.<your-subdomain>.workers.dev` answering `/mcp`, gated by
 your API key. Two things remain before it is *useful*:
 
-1. **Tell it about the mailbox.** Add a `vars` block to `wrangler.jsonc` in
-   your fork — `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, and optionally
-   `SYNC_FOLDERS` and the sizing knobs. Every value is named and explained in
-   [`.env.example`](../.env.example). Push, and your fork's continuous
-   deployment redeploys with them.
+1. **Tell it about the mailbox.** `IMAP_HOST` and `IMAP_USER` are the two
+   values this repository cannot commit for you — they identify your account.
+   Add them to the `vars` block in your fork's `wrangler.jsonc` (the sizing
+   knobs and `LOG_LEVEL` are already there, at their defaults) or in the
+   dashboard, where `keep_vars` keeps them across redeploys. Every value is
+   named and explained in [`.env.example`](../.env.example). Push, and your
+   fork's continuous deployment redeploys with them.
 2. **Wait for the backfill.** The cron runs hourly and paces itself (about
    five thousand messages an hour at the defaults), so a large mailbox takes
    some hours to index. A search that returns nothing right after a deploy is
@@ -98,8 +100,8 @@ any time with `pnpm exec wrangler secret put <NAME>`.
 
 Two write-backs land in your checkout on first deploy, and both are correct
 for a fork: wrangler records the provisioned `database_id` in
-`wrangler.jsonc`, and you add your mailbox `vars` there too. Commit them to
-your fork; never send them upstream.
+`wrangler.jsonc`, and you add your mailbox host and user to the `vars` block
+there too. Commit both to your fork; never send them upstream.
 
 ## Configuration reference
 
@@ -112,8 +114,8 @@ required secrets) or supplied by you:
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | your environment; wrangler reads it directly |
 | `IMAP_PASSWORD`, `MCP_API_KEY` | Worker secrets — the button prompts for them; manually, `wrangler secret put` (or `--secrets-file` on the first deploy) |
-| `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER` | `vars` in your fork's `wrangler.jsonc` |
-| `SYNC_FOLDERS` and the sizing vars | `vars`, all optional — [`.env.example`](../.env.example) explains each |
+| `IMAP_HOST`, `IMAP_USER` | `vars` in your fork's `wrangler.jsonc`, or the dashboard |
+| `LOG_LEVEL`, `IMAP_PORT`, `SYNC_FOLDERS`, the sizing vars | already in the committed `vars` block at their defaults — change them there, not in the dashboard, which a deploy overwrites |
 | `ACCESS_AUD` | only when upgrading to Cloudflare Access — see [authentication.md](./authentication.md) |
 | The D1 database, queues, R2 bucket | provisioned by the first deploy; the id written back is yours |
 
@@ -122,8 +124,28 @@ Locally: secrets go in a gitignored `.dev.vars` (copy
 API-key mode, and `pnpm run db:migrate:local` applies the schema to the local
 D1.
 
+## Is it working?
+
+```bash
+curl -s -H "Authorization: Bearer $MCP_API_KEY" https://<worker>.workers.dev/status | jq
+```
+
+`/status` is served behind the same gate as `/mcp` and answers, in one
+document: which credential the instance accepts, whether the mailbox
+configuration reads, whether migrations ran, how many messages are indexed per
+folder, and whether the backfill is converging. `200` when everything it can
+check itself passed, `503` when not.
+
+Right after a first deploy, `"index": { "messages": 0 }` with `"config": {"ok":
+true}` is the expected answer: the cron has not run yet. An hour later it
+should be thousands. [`observability.md`](./observability.md) is the full
+guide — the log lines, `LOG_LEVEL`, the queues, and what to do when a folder
+stops converging.
+
 ## After the deploy
 
+- `/status` says what the instance thinks of itself, and
+  [`observability.md`](./observability.md) says how to read it.
 - The endpoint is gated by the API key from the first request — see
   [authentication.md](./authentication.md) for what that does and does not
   protect, and for the optional upgrade to Cloudflare Access, which ties
