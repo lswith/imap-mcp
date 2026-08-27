@@ -188,6 +188,9 @@ answers:
 - **Every uid in the range is unanswered.** Look at the `[queue]` lines around
   it for a connection that failed mid-range.
 
+Making the Worker recover from this by itself — rather than only report it —
+is [#54](https://github.com/lswith/imap-mcp/issues/54).
+
 The cost of leaving a stall in place is not correctness — nothing is lost or
 wrong — it is that the folder never goes quiet: every tick re-runs a full
 enumeration and re-fetches up to `SYNC_MAX_CHUNKS_PER_RUN` ranges of mail that

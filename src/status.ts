@@ -75,7 +75,7 @@ type FolderStatus = {
    * Rows exist above the watermark while the watermark has not moved past
    * them — the folder is fetching ranges it has already fetched, hourly. It is
    * derived rather than recorded because it is a relationship between two
-   * numbers that are each individually fine.
+   * numbers that are each individually fine. The condition itself is #54.
    */
   stalled: boolean;
 };

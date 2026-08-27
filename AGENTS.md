@@ -80,7 +80,7 @@ one is a design change, not a refactor — take it to an issue first.
 - A uid enumeration saw and the consumer could not store is counted
   (`ChunkOutcome.missing`) and named in a warning. It is the one sync failure
   with no error behind it: nothing throws, the range acks, and the short bucket
-  pins the watermark and re-queues the range hourly for ever.
+  pins the watermark and re-queues the range hourly for ever (#54).
 - Consumers never write the watermark — enumeration owns it. Ranges complete
   out of order, and a consumer-side `max()` would claim contiguity that does
   not exist.

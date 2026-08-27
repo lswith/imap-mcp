@@ -291,7 +291,8 @@ async function enumerateFolder(
     // work and the watermark did not move, which means the same ranges will be
     // queued again next tick, and the tick after that. Something below the
     // first hole is not being stored — the consumer's "returned no headers"
-    // warning names the uids when that is why.
+    // warning names the uids when that is why. Reporting it is all this does;
+    // the fix, and the design question behind it, is #54.
     log.warn(
       `${name}: watermark still at ${resumeFrom} after queueing ${enumeration.enqueued} ranges — ` +
         `a bucket above it never completes, so this folder is re-queueing the same work every ` +

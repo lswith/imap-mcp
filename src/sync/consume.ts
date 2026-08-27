@@ -46,7 +46,8 @@ export type ChunkOutcome = {
    * bucket short, and a short bucket below the folder's first hole pins the
    * watermark and re-queues the range on every tick, for ever. A number that
    * does not go down across ticks is the signature of that, which is why it
-   * reaches the invocation line rather than staying an internal detail.
+   * reaches the invocation line rather than staying an internal detail. What
+   * to DO about a uid the server will not hand over is #54.
    */
   missing: number;
   /**
