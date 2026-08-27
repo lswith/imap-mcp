@@ -11,6 +11,8 @@ dist/
 .env
 .env.local
 !.env.example
+# Scratch file for a first deploy's --secrets-file; see scripts/setup-access.sh
+.secrets.env
 
 # wrangler
 .wrangler
