@@ -94,11 +94,11 @@ export default defineConfig({
           retry: 2,
           server: {
             deps: {
-              // cf-imap's published ESM uses extensionless relative imports
-              // ("./utils/imapStream"), which Node's ESM resolver rejects.
-              // Bundlers add the extension, so it loads fine in workerd and in
-              // `wrangler deploy`; here Vite has to process it rather than
-              // hand it to Node. Reported upstream.
+              // Vite must process cf-imap rather than hand it to Node so the
+              // `cloudflare:sockets` alias above applies inside the package
+              // (aliases don't reach externalized modules). The pinned fork
+              // also fixed the extensionless relative imports that used to
+              // make Node reject the published ESM outright (lswith/cf-imap#6).
               inline: ["cf-imap"],
             },
           },

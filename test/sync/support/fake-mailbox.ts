@@ -187,13 +187,30 @@ export class FakeMailbox implements Mailbox {
 /**
  * What a header-only fetch can answer.
  *
- * The header set is cf-imap's: SUBJECT FROM TO CC MESSAGE-ID CONTENT-TYPE DATE.
- * In-Reply-To and References are deliberately not among them, which is why an
- * oversize message's row carries neither.
+ * The header set is the pinned client's: SUBJECT FROM TO CC MESSAGE-ID
+ * IN-REPLY-TO REFERENCES CONTENT-TYPE DATE. The threading headers joined the
+ * list with the patched fork (lswith/cf-imap#4) — they are what let an
+ * oversize message's row keep its place in a thread, pinned by the
+ * protocol-harness contract test and the oversize test in consume.test.ts.
  */
+const HEADER_ONLY_FIELDS = [
+  "subject",
+  "from",
+  "to",
+  "cc",
+  "message-id",
+  "in-reply-to",
+  "references",
+  "content-type",
+  "date",
+] as const;
+
 function headersOnly(message: MailboxMessage): MailboxMessage {
   const headers: Record<string, string> = {};
-  if (message.headers.date !== undefined) headers.date = message.headers.date;
+  for (const field of HEADER_ONLY_FIELDS) {
+    const value = message.headers[field];
+    if (value !== undefined) headers[field] = value;
+  }
   return { ...message, headers, text: undefined, html: undefined, raw: "", attachments: [] };
 }
 

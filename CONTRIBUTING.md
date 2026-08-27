@@ -47,6 +47,15 @@ defect that belongs to the client library goes upstream
 than accumulating workarounds here; the harness test is what pins the
 behaviour in the meantime.
 
+The fallback for an unmerged upstream fix is a patched fork, not a
+workaround: the fix lands as a pull request on
+[lswith/cf-imap](https://github.com/lswith/cf-imap) (one PR per defect, each
+also reported upstream), and `package.json` pins the git ref that carries it
+— the fork's `prepare` script builds the package at install time. The pin
+moves back to a registry release when upstream merges, and the
+harness tests, which assert the *correct* behaviour, are what make that
+switch safe.
+
 ## What to know before writing code
 
 [`AGENTS.md`](./AGENTS.md) is the compact rules file — the invariants that

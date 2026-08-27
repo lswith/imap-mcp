@@ -191,13 +191,12 @@ class CfImapMailbox implements Mailbox {
   async setFlags(uids: UidSet, flags: string[], mode: FlagMode = "add"): Promise<MessageFlags[]> {
     await this.#run(() => this.#client.storeFlags(formatUidSet(uids), flags, mode, true));
 
-    // The STORE response is deliberately discarded. cf-imap parses the
-    // untagged FETCH confirmation with a regex that has no room for the
-    // `MODSEQ (n)` RFC 7162 §3.1.3 requires the server to append once
-    // CONDSTORE is enabled, so with CONDSTORE on — which #8 wants
-    // session-wide — it reports zero rows for a write that landed. Reading the
-    // flags back is the only answer that is true either way, and #8/#12 both
-    // require the verification regardless.
+    // The STORE response is deliberately discarded, even though the patched
+    // client (lswith/cf-imap#1) now parses the `MODSEQ (n)` that RFC 7162
+    // §3.1.3 appends to the untagged FETCH confirmation once CONDSTORE is
+    // enabled. Reading the flags back is the only answer that is true
+    // whatever the client reports, and #8/#12 both require the verification
+    // regardless.
     const verified = await this.fetchMessages({ uids, includeBody: false });
     return verified.map((message) => ({ uid: message.uid, flags: message.flags }));
   }

@@ -16,6 +16,12 @@ minimumReleaseAge: 5760
 # pnpm blocks dependency postinstall scripts by default; these genuinely
 # need theirs (platform binaries).
 allowBuilds:
+  # Installed from a git ref of the patched fork (lswith/cf-imap), which
+  # ships sources only — its prepare script (tsc, no dependencies beyond
+  # typescript) builds dist/ at install time. Registry versions ship a
+  # prebuilt dist/ and need no build; drop this entry when the dependency
+  # moves back to a registry release.
+  cf-imap: true
   # Pulled in by miniflare (via wrangler and @cloudflare/vitest-pool-workers)
   # for the Images binding.
   sharp: true

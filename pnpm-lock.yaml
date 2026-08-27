@@ -12,8 +12,8 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0
       cf-imap:
-        specifier: 1.0.0
-        version: 1.0.0(typescript@7.0.2)
+        specifier: github:lswith/cf-imap#04512b1dfd6438e0a817351f1a4de88dd4707243
+        version: https://codeload.github.com/lswith/cf-imap/tar.gz/04512b1dfd6438e0a817351f1a4de88dd4707243(typescript@7.0.2)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -1166,8 +1166,9 @@ packages:
   caniuse-lite@1.0.30001809:
     resolution: {integrity: sha512-xxWVywk6a6Arlk+hymeycyn/VgqEfLDxupvhH/xiY5SJ/18kmi9o6MiO320DCUzypORHLtvh0I4i04tUhCNHNQ==}
 
-  cf-imap@1.0.0:
-    resolution: {integrity: sha512-4YxLt+7LPMawcl2m0VtVgLL7xOGOQJDHNvQejN7a+AoJLJClFoZ3RXhxkIVkVY/Ibhe3cLgTdntoc5+/WiGnog==}
+  cf-imap@https://codeload.github.com/lswith/cf-imap/tar.gz/04512b1dfd6438e0a817351f1a4de88dd4707243:
+    resolution: {gitHosted: true, integrity: sha512-5xgmI9jx7jkqhS2Jk41AbKpomsZpShVdRujYpEnIVKJLrWxcmg7ogm2l+r9RvwmQl+C4SGoOBWbve03g3XAsbA==, tarball: https://codeload.github.com/lswith/cf-imap/tar.gz/04512b1dfd6438e0a817351f1a4de88dd4707243}
+    version: 1.0.0
     peerDependencies:
       typescript: ^5.0.0
 
@@ -2511,7 +2512,7 @@ snapshots:
 
   caniuse-lite@1.0.30001809: {}
 
-  cf-imap@1.0.0(typescript@7.0.2):
+  cf-imap@https://codeload.github.com/lswith/cf-imap/tar.gz/04512b1dfd6438e0a817351f1a4de88dd4707243(typescript@7.0.2):
     dependencies:
       typescript: 7.0.2
 

@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
-    "cf-imap": "1.0.0",
+    "cf-imap": "github:lswith/cf-imap#04512b1dfd6438e0a817351f1a4de88dd4707243",
     "zod": "^4.4.3"
   },
   "devDependencies": {

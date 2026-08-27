@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetServers } from "../support/fake-sockets";
-import { fakeMessage, plainText } from "../support/fixtures";
+import { fakeMessage, plainText, threadReply } from "../support/fixtures";
 import { openMailbox } from "../support/harness";
 
 beforeEach(() => {
@@ -174,6 +174,28 @@ describe("fetching", () => {
     expect(server.commands.at(-1)).toContain("BODY.PEEK[HEADER.FIELDS");
   });
 
+  it("asks for the threading headers on a header-only fetch and returns them", async () => {
+    // Threading is built from reference headers at index time, and an
+    // oversize message's row only ever sees a header-only fetch — so
+    // In-Reply-To and References being in the requested field set is what
+    // keeps oversize mail threadable. It became true with the pinned fork
+    // (lswith/cf-imap#4; upstream report Exerra/cf-imap#9). The scripted
+    // server answers only the fields the client asked for, so the header
+    // assertions below can pass only because the request named them.
+    const { server, mailbox } = await openMailbox({
+      messages: [fakeMessage(1, plainText), fakeMessage(2, threadReply)],
+    });
+    await mailbox.selectFolder("Archive");
+
+    const [message] = await mailbox.fetchMessages({ uids: 2, includeBody: false });
+
+    const fetch = server.commands.find((command) => command.includes("UID FETCH"));
+    expect(fetch).toContain("IN-REPLY-TO");
+    expect(fetch).toContain("REFERENCES");
+    expect(message.headers["in-reply-to"]).toBe("<plain-1@example.com>");
+    expect(message.headers.references).toBe("<root-0@example.com> <plain-1@example.com>");
+  });
+
   it("searches by UID", async () => {
     const { server, mailbox } = await openMailbox({ messages, searchResult: [2, 5] });
     await mailbox.selectFolder("Archive");
@@ -200,9 +222,9 @@ describe("writes", () => {
 
     const result = await mailbox.setFlags(1, ["Flagged"]);
 
-    // Under CONDSTORE the STORE confirmation carries a MODSEQ the client
-    // cannot parse, so the STORE response is worthless — this value can only
-    // have come from the read-back.
+    // The STORE response is discarded by design (the read-back is what #8
+    // and #12 require), so this value can only have come from the read-back
+    // — asserted below by command order.
     expect(result).toEqual([{ uid: 1, flags: ["Flagged"] }]);
 
     const store = server.commands.findIndex((command) => command.includes("UID STORE"));
