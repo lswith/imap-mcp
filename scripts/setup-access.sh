@@ -185,9 +185,9 @@ finish() {
 #
 # Nothing account-specific is baked in: this file is committed to a public
 # repository, so every value is prompted for. What it collects lands in a
-# gitignored .env, and scripts/deploy-config.mjs generates the wrangler config
-# a deploy uses from there. No committed file is ever edited, so there is
-# nothing to accidentally push upstream.
+# gitignored .env as your record of the values; runtime configuration itself
+# goes into the `vars` block of wrangler.jsonc IN YOUR FORK (correct there,
+# never pushed upstream) — see .env.example.
 #
 # The order below is not the order the docs used to give, and the difference
 # matters: Access is attached to the WORKER rather than to a hostname, and you
@@ -205,7 +205,7 @@ say "It is the load-bearing control in this design, so it is worth doing slowly.
 step "You need a Cloudflare account with Zero Trust enabled and an identity"
 step "provider configured. The free plan covers 50 users."
 step "You need a zone on that account to hang the hostname off."
-step "You need Workers Paid — for the sync worker's queues, not for Access."
+step "You need Workers Paid — for the sync queues, not for Access."
 note "Nothing here is irreversible, and nothing here is briefly open. The"
 note "worker refuses every request Access did not authenticate for it, so a"
 note "deploy without an Access application is a dead endpoint, not an open one."
@@ -232,42 +232,26 @@ write_env MCP_ZONE_NAME "$MCP_ZONE_NAME"
 write_env MCP_ROUTE_PATTERN "$MCP_ROUTE_PATTERN"
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Deploy the workers"
+stage "Deploy the Worker"
 say "Access attaches to the Worker, and you cannot attach one that does not"
-say "exist. So the workers get deployed first — with no route and no audience"
-say "tag yet."
+say "exist. So the Worker gets deployed first — with no audience tag yet."
 say ""
 warn "That is safe, and it is worth knowing why rather than trusting it:"
-note "no route and workers_dev/preview_urls false means nothing can reach the"
-note "MCP worker at all; and with ACCESS_AUD unset it answers 500 to every"
-note "request even if something could. The gate fails closed."
+note "with ACCESS_AUD unset the worker answers 500 to every request, even at"
+note "its workers.dev hostname. The gate fails closed."
 say ""
-warn "Deploy imap-mcp-sync FIRST, if you have not already."
-note "Neither wrangler.jsonc commits a database_id, so whichever worker you"
-note "deploy first provisions the D1 database that BOTH of them share. Deploy"
-note "this one first and the second deploy makes a SECOND database; nothing"
-note "errors, the MCP server just serves an empty index for ever."
-note "See README.md -> First deploy. Queues needs a Workers Paid plan."
+note "wrangler.jsonc commits no database_id, so the first deploy provisions"
+note "the D1 database and writes the id back into your checkout — keep it in"
+note "your fork, and don't push it upstream. Queues needs a Workers Paid plan."
 say ""
-
-if confirm "Has imap-mcp-sync already been deployed to this account?"; then
-  say "Good. Then run:"
-else
-  say "Do that first -- README.md -> First deploy walks it. Then run, in order:"
-  say ""
-  printf '  pnpm --filter @imap-mcp/sync run deploy\n'
-fi
-
+say "Run, in order:"
 say ""
+printf '  pnpm run deploy\n'
 printf '  pnpm run db:migrate:remote\n'
-printf '  pnpm --filter @imap-mcp/mcp run deploy\n'
 say ""
 step "The schema apply is a no-op if re-run."
-note "The deploy scripts regenerate a gitignored wrangler config from your"
-note ".env first, so packages/*/wrangler.jsonc is never edited. The database"
-note "id wrangler provisions is recorded back into .env automatically."
 say ""
-confirm "Both workers deployed?" || exit 0
+confirm "Worker deployed?" || exit 0
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
 stage "Create the Access application"
@@ -275,7 +259,7 @@ open_url "https://one.dash.cloudflare.com/"
 say "Access controls -> Applications -> Add an application -> Self-hosted."
 say "The dashboard wants these in this order:"
 say ""
-step "1. Destinations -> 'Add Workers' -> pick imap-mcp-server."
+step "1. Destinations -> 'Add Workers' -> pick imap-mcp."
 note "   Not a public hostname. Attaching the Worker is what Cloudflare calls"
 note "   the safest way to gate one: it covers every route, Custom Domain and"
 note "   workers.dev URL at once, rather than the single URL you name."
@@ -310,9 +294,10 @@ note "exactly the point."
 ask ACCESS_AUD "Paste the Application Audience tag:"
 write_env ACCESS_AUD "$ACCESS_AUD"
 say ""
-say "That is everything. Re-deploy to pick up the audience and the route:"
+say "That is everything. Add ACCESS_AUD (and your route, if you chose one)"
+say "to the vars block of wrangler.jsonc in your fork, then re-deploy:"
 say ""
-printf '  pnpm --filter @imap-mcp/mcp run deploy\n'
+printf '  pnpm run deploy\n'
 printf '  curl -sSD- -o /dev/null https://%s/mcp\n' "$MCP_ROUTE_PATTERN"
 say ""
 step "Expect 401 with a www-authenticate header, and NO location header."

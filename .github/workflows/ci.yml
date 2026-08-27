@@ -2,7 +2,7 @@ name: CI
 
 # Everything that gates a pull request, in one job sharing one install: Biome
 # (lint + format), TypeScript, the workerd test suites, knip (dead code), and a
-# wrangler deploy dry-run for both workers.
+# wrangler deploy dry-run.
 #
 # Every check after the install runs even if an earlier one failed, so one red
 # check doesn't hide the others -- a full picture per run rather than a
