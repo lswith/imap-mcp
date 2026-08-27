@@ -181,7 +181,7 @@ finish() {
 
 # ──────────────────────────────────────────────────────────────────────────
 # STAGES — Cloudflare Access (Managed OAuth) for the MCP worker. See #10 and
-# docs/access.md, which this walks step for step.
+# docs/authentication.md, which this walks step for step.
 #
 # Nothing account-specific is baked in: this file is committed to a public
 # repository, so every value is prompted for. What it collects lands in a
@@ -317,6 +317,6 @@ note "That curl passes whether or not the gate works, though: a request with no"
 note "Access context is refused either way. The check that actually proves it"
 note "is connecting Claude Code and running a search once signed in. If a"
 note "SIGNED-IN user gets 401, ctx.access is not reaching the worker."
-note "docs/access.md has the full list."
+note "docs/authentication.md has the full list."
 
 finish
