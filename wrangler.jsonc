@@ -46,11 +46,12 @@
   // throttles and the log level live here, and IMAP_HOST, IMAP_USER,
   // SYNC_SINCE, DRAFT_FROM, DRAFTS_FOLDER and ACCESS_AUD do not -- they name
   // one person's mailbox or one Zero Trust application, and this file is
-  // committed to a public repository. Add those in a fork (see .env.example)
-  // or in the dashboard; `keep_vars` below is what makes the second of those
-  // survive a deploy -- and the dashboard is the ONLY option when what is
-  // being deployed is this repository rather than a fork of it, which is the
-  // case for whoever maintains it (docs/deploy.md).
+  // committed to a public repository. Add those in a fork (see .env.example),
+  // in the dashboard -- `keep_vars` below is what makes those survive a deploy
+  // -- or as secrets, which a deploy never touches. Deploying THIS repository
+  // rather than a fork of it, which is the case for whoever maintains it, the
+  // last two are the options: there is no private file to put them in
+  // (docs/deploy.md).
   //
   // Every value here restates the default in src/sync/config.ts, so this block
   // changes no behaviour -- what it changes is that `wrangler deploy` prints
