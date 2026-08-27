@@ -6,6 +6,47 @@ It is generic by design rather than by ambition — host, port and credentials a
 
 > **Status: early.** The mailbox interface ([#3](https://github.com/lswith/imap-mcp/issues/3)), the D1 schema ([#4](https://github.com/lswith/imap-mcp/issues/4)), the tracer sync ([#5](https://github.com/lswith/imap-mcp/issues/5)), the queue fan-out ([#6](https://github.com/lswith/imap-mcp/issues/6)) incremental sync ([#8](https://github.com/lswith/imap-mcp/issues/8)) attachments ([#9](https://github.com/lswith/imap-mcp/issues/9)) the MCP server ([#7](https://github.com/lswith/imap-mcp/issues/7)), the Access gate ([#10](https://github.com/lswith/imap-mcp/issues/10)), the retrieval tools ([#11](https://github.com/lswith/imap-mcp/issues/11)) and the write tools ([#12](https://github.com/lswith/imap-mcp/issues/12)) are implemented and tested: the sync worker enumerates folders on a cron, resumes from where the last run got to, and indexes them into D1 and R2 through a queue, and the MCP server serves `search_messages`, `get_message` and `get_thread` over that index to callers Cloudflare Access has authenticated — bodies one message at a time, by id — plus three write tools it proxies back to the sync worker. The MCP worker still declares no route, because a route names a zone this repository does not commit — see [`docs/access.md`](./docs/access.md). See [Roadmap](#roadmap).
 
+## Deploy
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/lswith/imap-mcp)
+
+**What it costs, before you click:** the sync fan-out runs on Cloudflare
+Queues, which requires the **Workers Paid plan** (US$5/month at time of
+writing) — a free-plan deploy will fail at queue provisioning. Everything else
+(the Worker, D1, R2) fits comfortably in the paid plan's included usage for a
+single mailbox. You also need a mailbox **app-specific password** (for iCloud:
+appleid.apple.com → Sign-In and Security → App-Specific Passwords); it grants
+full mailbox access including SMTP send, so treat it like the account password.
+
+The button clones the repository into your account, provisions the D1
+database, both queues and the R2 bucket, prompts for the two required secrets
+— the mailbox password and an MCP API key (generate one with
+`openssl rand -base64 32`) — and deploys. Migrations run inside the deploy
+script, so the schema is applied on the first deploy and on every redeploy
+after you merge an upstream change. The button currently deploys the `main`
+branch; once releases exist ([#38](https://github.com/lswith/imap-mcp/issues/38))
+it will track the latest release instead.
+
+Deployment is a two-step story, and the second step is optional:
+
+1. **The button gives you a working instance authenticated by the API key.**
+   Point an MCP client at `https://<worker>.<account>.workers.dev/mcp` with
+   `Authorization: Bearer <your key>`.
+2. **Putting Cloudflare Access in front of it** ties authentication to your
+   identity provider instead of a shared string, and refuses the key from then
+   on. That is a documented follow-up — see [`docs/access.md`](./docs/access.md)
+   — not a prerequisite.
+
+Deploying from your own machine instead: fork, clone, `pnpm install`, and from
+then on `pnpm run deploy` is the one command — it migrates and deploys, in that
+order, so the two cannot be done out of sequence. The very first manual deploy
+is the one exception, because nothing exists yet: the Worker is not there for
+`wrangler secret put` to target and the database is not there to migrate, so
+the first run passes the secrets alongside the code and migrates after —
+`pnpm exec wrangler deploy --secrets-file <file>`, then
+`pnpm run db:migrate:remote`. `.env.example`'s Secrets section has the exact
+commands, and `scripts/setup-access.sh` prints them.
+
 ## What it does
 
 Indexes a mailbox into Cloudflare's storage, then serves it to an MCP client as search and retrieval tools — so a model can answer questions against fifteen years of mail without the mailbox itself being in the loop on every query.
