@@ -21,8 +21,11 @@ name: CI
 # runs on pushes to main; the two share the event and duplicate nothing.
 #
 # A pull request cancels its own superseded runs, since only the tip is being
-# gated. Pushes to main do not: each commit on main gets a finished run, which
-# is what makes "main was green at this commit" a fact that can be looked up.
+# gated. A push to main is grouped by commit instead of by ref, so it shares a
+# group with nothing: it cannot be cancelled by a later merge, and cannot be
+# dropped as a pending run that a newer one replaces -- which GitHub does
+# whatever cancel-in-progress says. That is what makes "main was green at this
+# commit" a fact that can be looked up afterwards.
 
 on:
   pull_request:
@@ -32,7 +35,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
