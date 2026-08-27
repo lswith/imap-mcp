@@ -55,8 +55,10 @@ required secrets — the mailbox password and an MCP API key — and deploys.
 Migrations run inside the deploy script, so the schema is applied on the first
 deploy and on every redeploy after you merge an upstream change. You get a
 working endpoint authenticated by the API key; putting Cloudflare Access in
-front of it is an optional, documented upgrade. The button deploys `main`
-until releases exist ([#38](https://github.com/lswith/imap-mcp/issues/38)).
+front of it is an optional, documented upgrade. The button deploys `main`;
+deploying a tagged [release](https://github.com/lswith/imap-mcp/releases)
+instead means putting `/tree/<tag>` on the button URL yourself, until the
+first by-hand button verification confirms tags work there.
 
 [`docs/deploy.md`](./docs/deploy.md) is the full guide — the button path, the
 manual path, and the configuration reference.

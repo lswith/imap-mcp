@@ -1,0 +1,49 @@
+name: Release Please
+
+# Releases, generated from Conventional Commits (#38). On every push to main
+# this proposes (or refreshes) a version-bump pull request carrying the
+# generated changelog; merging that PR is what tags and publishes the GitHub
+# release. A release is therefore always a deliberate act — the automation
+# only ever opens a PR, never merges one.
+#
+# Since forks are how anyone else runs this and nothing pushes updates into
+# them, a release is the only signal a fork ever gets that something changed.
+# That raises the bar for release notes rather than lowering it: anything that
+# affects a deployment — a schema change, a new required secret, a config
+# change — must be legible in the notes, so call those out in commit bodies
+# (they flow into the changelog).
+#
+# Two operational notes:
+#   - The release PR is opened with the workflow's GITHUB_TOKEN, and GitHub
+#     deliberately does not trigger workflows on events that token creates —
+#     so CI will not run on the release PR by itself. Close and reopen it (or
+#     push to it) to run CI, or merge on the strength of main being green,
+#     which it is by construction: everything in the PR is already on main.
+#   - The version line stays pre-1.0 until stability is actually being
+#     offered: the manifest starts empty, so the first run takes the
+#     initial-version path (0.1.0, release-please-config.json) and every later
+#     bump is governed by bump-minor-pre-major. The first release PR is still
+#     reviewed before merge — if it proposes the wrong version, a
+#     "Release-As:" footer on an empty commit overrides it.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
