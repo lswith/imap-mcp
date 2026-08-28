@@ -345,19 +345,17 @@ export function tidyLines(text: string): string {
  * signature is content — so only the HTML path collapses runs of spaces.
  */
 export async function normaliseBody(message: MailboxMessage): Promise<string | null> {
-  const plain = message.text?.trim() ? tidyLines(message.text) : "";
-  let text = plain || (message.html ? await htmlToText(message.html) : "");
+  const plain = message.text?.trim() ? stripInvisible(tidyLines(message.text)) : "";
+  let text = plain || (message.html ? stripInvisible(await htmlToText(message.html)) : "");
   if (plain && message.html && plain.length <= SHORT_PLAIN_FALLBACK_CHARS) {
-    const html = await htmlToText(message.html);
+    const html = stripInvisible(await htmlToText(message.html));
     if (html.length > plain.length) text = html;
   }
   if (!text) return null;
 
-  const stripped = stripInvisible(text);
-  if (!stripped) return null;
-  return stripped.length > MAX_BODY_CHARS
-    ? stripped.slice(0, MAX_BODY_CHARS) + TRUNCATION_MARKER
-    : stripped;
+  return text.length > MAX_BODY_CHARS
+    ? text.slice(0, MAX_BODY_CHARS) + TRUNCATION_MARKER
+    : text;
 }
 
 /**
