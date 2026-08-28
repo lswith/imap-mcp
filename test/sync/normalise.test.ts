@@ -140,6 +140,51 @@ describe("normaliseBody", () => {
     expect(await normaliseBody(message)).toBe("indented line\n\nafter blank lines");
   });
 
+  it("uses the HTML body when the plain part is only a short placeholder", async () => {
+    const message = fakeMessage(1, {
+      text: "This email cannot be displayed in text only mode. Please enable HTML mode.",
+      html:
+        "<p>Invoice ready</p><p>Total due: $42.00</p><p>Pay before Friday.</p>" +
+        "<p>Download the attached statement for the full billing period.</p>",
+    });
+
+    expect(await normaliseBody(message)).toBe(
+      [
+        "Invoice ready",
+        "Total due: $42.00",
+        "Pay before Friday.",
+        "Download the attached statement for the full billing period.",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps a short plain part when it carries more text than the HTML", async () => {
+    const message = fakeMessage(1, {
+      text: "reply with enough context",
+      html: "<p>reply</p>",
+    });
+
+    expect(await normaliseBody(message)).toBe("reply with enough context");
+  });
+
+  it("compares body lengths after stripping invisible HTML characters", async () => {
+    const message = fakeMessage(1, {
+      text: "visible plain body",
+      html: `<p>${"&#8203;".repeat(80)}</p>`,
+    });
+
+    expect(await normaliseBody(message)).toBe("visible plain body");
+  });
+
+  it("keeps a long plain part even when the HTML alternative is longer", async () => {
+    const message = fakeMessage(1, {
+      text: `${"plain ".repeat(90)}\nkept`,
+      html: `<p>${"html ".repeat(130)}extra</p>`,
+    });
+
+    expect(await normaliseBody(message)).toBe(`${"plain ".repeat(90).trimEnd()}\nkept`);
+  });
+
   it("falls back to the HTML when there is no usable text part", async () => {
     const message = fakeMessage(1, { text: "   \n  ", html: "<p>only in the html</p>" });
 
