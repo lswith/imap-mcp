@@ -35,12 +35,12 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.1",
+    "@biomejs/biome": "^2.5.10",
     "@cloudflare/vitest-plugin": "^1.0.0",
     "@modelcontextprotocol/client": "^2.0.0",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "@vitest/coverage-istanbul": "^4.1.9",
-    "knip": "^6.23.0",
+    "knip": "^6.32.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.8",
     "wrangler": "^4.105.0"
